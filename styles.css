@@ -1,0 +1,56 @@
+.sheet-extend-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--interactive-accent) 50%,
+    transparent
+  );
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+th:hover .sheet-extend-resizer,
+td:hover .sheet-extend-resizer {
+  opacity: 0.6;
+}
+
+.sheet-extend-resizer:hover,
+.sheet-extend-resizer.dragging {
+  opacity: 1;
+  transform: scaleX(1.5);
+  background: var(--interactive-accent-hover);
+}
+
+body.sheet-extend-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.sheet-extend-resizing table {
+  border-color: var(--interactive-accent);
+}
+
+table[data-resizing="true"] {
+  user-select: none;
+}
+
+table[data-resizing="true"] th,
+table[data-resizing="true"] td {
+  border-color: var(--interactive-accent) !important;
+  background: var(--background-modifier-form-field);
+}
+
+.sheet-extend-error {
+  color: var(--text-error);
+  font-family: var(--font-monospace);
+  text-align: center;
+  padding: 1em;
+}
