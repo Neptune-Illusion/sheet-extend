@@ -174,7 +174,10 @@ function stripMergeMarkers(grid) {
   for (const row of grid) {
     for (const cell of row) {
       if (!cell.hidden) {
-        cell.text = cell.text.replace(/[<^]/g, "").trim();
+        const trimmed = cell.text.trim();
+        if (trimmed === "<" || trimmed === "^") {
+          cell.text = "";
+        }
       }
     }
   }
@@ -453,10 +456,10 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data == null ? void 0 : data.settings);
     const savedVersion = (data == null ? void 0 : data.version) || "0.0.0";
-    if (savedVersion !== "1.1.1") {
+    if (savedVersion !== "1.1.2") {
       this.widthStore = {};
       await this.saveData({
-        version: "1.1.1",
+        version: "1.1.2",
         settings: this.settings,
         columnWidths: {}
       });
@@ -466,7 +469,7 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
   }
   async saveSettings() {
     await this.saveData({
-      version: "1.1.1",
+      version: "1.1.2",
       settings: this.settings,
       columnWidths: this.widthStore
     });

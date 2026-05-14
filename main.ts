@@ -116,10 +116,10 @@ export default class SheetExtendPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
     const savedVersion = data?.version || "0.0.0";
 
-    if (savedVersion !== "1.1.1") {
+    if (savedVersion !== "1.1.2") {
       this.widthStore = {};
       await this.saveData({
-        version: "1.1.1",
+        version: "1.1.2",
         settings: this.settings,
         columnWidths: {},
       });
@@ -130,7 +130,7 @@ export default class SheetExtendPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData({
-      version: "1.1.1",
+      version: "1.1.2",
       settings: this.settings,
       columnWidths: this.widthStore,
     });

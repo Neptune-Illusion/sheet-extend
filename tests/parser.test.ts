@@ -50,4 +50,23 @@ describe("parseAndMerge", () => {
     expect(parsed.grid[1][0].rowspan).toBe(2);
     expect(parsed.grid[2][0].hidden).toBe(true);
   });
+
+  it("preserves HTML tags in cell content (does not strip < from HTML)", () => {
+    const input = '| Header |\n| --- |\n| <font color="#ff0000">重要</font> |';
+    const parsed = parseAndMerge(input);
+    // The cell text must retain the full HTML tags
+    expect(parsed.grid[1][0].text).toBe('<font color="#ff0000">重要</font>');
+  });
+
+  it("preserves <br> tags in cell content", () => {
+    const input = '| Header |\n| --- |\n| 第一行<br>第二行 |';
+    const parsed = parseAndMerge(input);
+    expect(parsed.grid[1][0].text).toBe('第一行<br>第二行');
+  });
+
+  it("preserves ^ character when part of larger content", () => {
+    const input = '| Header |\n| --- |\n| x^2 + y^2 |';
+    const parsed = parseAndMerge(input);
+    expect(parsed.grid[1][0].text).toBe('x^2 + y^2');
+  });
 });

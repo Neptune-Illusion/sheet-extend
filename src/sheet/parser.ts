@@ -120,7 +120,13 @@ export function stripMergeMarkers(grid: Cell[][]): void {
   for (const row of grid) {
     for (const cell of row) {
       if (!cell.hidden) {
-        cell.text = cell.text.replace(/[<^]/g, "").trim();
+        // Only strip merge markers when the entire cell content is exactly
+        // "<" or "^". Do NOT strip < or ^ from cells containing HTML tags
+        // or other content.
+        const trimmed = cell.text.trim();
+        if (trimmed === "<" || trimmed === "^") {
+          cell.text = "";
+        }
       }
     }
   }
