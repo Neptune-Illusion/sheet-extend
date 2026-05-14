@@ -2,6 +2,7 @@ import { Plugin, MarkdownView, MarkdownRenderChild } from "obsidian";
 import { SheetExtendSettings, DEFAULT_SETTINGS, SheetExtendSettingTab } from "./src/settings";
 import { parseAndMerge } from "./src/sheet/parser";
 import { renderTable } from "./src/sheet/renderer";
+import { hasMergeMarkers } from "./src/sheet/detect";
 import { makeTableResizable } from "./src/resizer/resizer";
 import { getTableId, saveWidths, loadWidths, applySavedWidths } from "./src/resizer/persistence";
 
@@ -75,6 +76,15 @@ export default class SheetExtendPlugin extends Plugin {
         const delim = "| " + Array(colCount).fill("---").join(" | ") + " |";
         sourceText = rows[0] + "\n" + delim + "\n" + rows.slice(1).join("\n");
       }
+    }
+
+    if (!hasMergeMarkers(sourceText)) {
+      const savedWidths = loadWidths(this, tableId);
+      if (savedWidths) {
+        applySavedWidths(tableEl, savedWidths);
+      }
+      this.setupResizer(tableEl);
+      return;
     }
 
     const parsed = parseAndMerge(sourceText);
