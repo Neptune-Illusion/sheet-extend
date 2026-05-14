@@ -16,6 +16,15 @@ export function renderTable(
 
   if (grid.length === 0) return;
 
+  const colCount = Math.max(...grid.map((row) => row.length));
+  const colgroup = tableEl.createEl("colgroup");
+  for (let i = 0; i < colCount; i++) {
+    const col = colgroup.createEl("col");
+    if (alignments[i]) {
+      col.setAttribute("data-align", alignments[i]);
+    }
+  }
+
   const headerCount = 1;
   const headerRows = grid.slice(0, headerCount);
   const dataRows = grid.slice(headerCount);
