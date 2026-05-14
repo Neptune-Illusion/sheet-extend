@@ -4,7 +4,7 @@ HTMLElement.prototype.empty = function () {
   this.innerHTML = "";
 };
 
-HTMLElement.prototype.createEl = function (
+(HTMLElement.prototype as any).createEl = function (
   tag: string,
   _attrs?: any,
   _text?: string

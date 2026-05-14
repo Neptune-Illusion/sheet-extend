@@ -105,6 +105,10 @@ export default class SheetExtendPlugin extends Plugin {
     });
   }
 
+  onunload() {
+    document.body.classList.remove("sheet-extend-resizing");
+  }
+
   async loadSettings() {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);

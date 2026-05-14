@@ -22,6 +22,15 @@ export class SheetExtendSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
+  get settings(): SheetExtendSettings {
+    return (this.plugin as any).settings;
+  }
+
+  async updateSettings(changes: Partial<SheetExtendSettings>) {
+    Object.assign((this.plugin as any).settings, changes);
+    await (this.plugin as any).saveSettings();
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
@@ -33,10 +42,9 @@ export class SheetExtendSettingTab extends PluginSettingTab {
       .addSlider((slider) =>
         slider
           .setLimits(30, 100, 5)
-          .setValue((this.plugin as any).settings.minWidth)
+          .setValue(this.settings.minWidth)
           .onChange(async (value) => {
-            (this.plugin as any).settings.minWidth = value;
-            await (this.plugin as any).saveSettings();
+            await this.updateSettings({ minWidth: value });
           })
       );
 
@@ -46,10 +54,9 @@ export class SheetExtendSettingTab extends PluginSettingTab {
       .addSlider((slider) =>
         slider
           .setLimits(200, 800, 10)
-          .setValue((this.plugin as any).settings.maxWidth)
+          .setValue(this.settings.maxWidth)
           .onChange(async (value) => {
-            (this.plugin as any).settings.maxWidth = value;
-            await (this.plugin as any).saveSettings();
+            await this.updateSettings({ maxWidth: value });
           })
       );
 
@@ -59,10 +66,9 @@ export class SheetExtendSettingTab extends PluginSettingTab {
       .addSlider((slider) =>
         slider
           .setLimits(80, 300, 5)
-          .setValue((this.plugin as any).settings.defaultWidth)
+          .setValue(this.settings.defaultWidth)
           .onChange(async (value) => {
-            (this.plugin as any).settings.defaultWidth = value;
-            await (this.plugin as any).saveSettings();
+            await this.updateSettings({ defaultWidth: value });
           })
       );
 
@@ -71,10 +77,9 @@ export class SheetExtendSettingTab extends PluginSettingTab {
       .setDesc("Automatically process all markdown tables (not just sheet code blocks)")
       .addToggle((toggle) =>
         toggle
-          .setValue((this.plugin as any).settings.nativeProcessing)
+          .setValue(this.settings.nativeProcessing)
           .onChange(async (value) => {
-            (this.plugin as any).settings.nativeProcessing = value;
-            await (this.plugin as any).saveSettings();
+            await this.updateSettings({ nativeProcessing: value });
           })
       );
   }
