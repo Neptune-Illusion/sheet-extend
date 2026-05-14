@@ -98,11 +98,23 @@ export default class SheetExtendPlugin extends Plugin {
   async loadSettings() {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
-    this.widthStore = data?.columnWidths || {};
+    const savedVersion = data?.version || "0.0.0";
+
+    if (savedVersion !== "1.1.0") {
+      this.widthStore = {};
+      await this.saveData({
+        version: "1.1.0",
+        settings: this.settings,
+        columnWidths: {},
+      });
+    } else {
+      this.widthStore = data?.columnWidths || {};
+    }
   }
 
   async saveSettings() {
     await this.saveData({
+      version: "1.1.0",
       settings: this.settings,
       columnWidths: this.widthStore,
     });
