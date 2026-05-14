@@ -2,6 +2,7 @@ import { Plugin, MarkdownView, MarkdownRenderChild } from "obsidian";
 import { SheetExtendSettings, DEFAULT_SETTINGS, SheetExtendSettingTab } from "./src/settings";
 import { parseAndMerge } from "./src/sheet/parser";
 import { renderTable } from "./src/sheet/renderer";
+import { hasMergeMarkers } from "./src/sheet/detect";
 import { makeTableResizable } from "./src/resizer/resizer";
 import { getTableId, saveWidths, loadWidths, applySavedWidths } from "./src/resizer/persistence";
 
@@ -77,6 +78,15 @@ export default class SheetExtendPlugin extends Plugin {
       }
     }
 
+    if (!hasMergeMarkers(sourceText)) {
+      const savedWidths = loadWidths(this, tableId);
+      if (savedWidths) {
+        applySavedWidths(tableEl, savedWidths);
+      }
+      this.setupResizer(tableEl);
+      return;
+    }
+
     const parsed = parseAndMerge(sourceText);
     renderTable(this.app, tableEl, parsed, context.sourcePath || "", this);
 
@@ -95,14 +105,30 @@ export default class SheetExtendPlugin extends Plugin {
     });
   }
 
+  onunload() {
+    document.body.classList.remove("sheet-extend-resizing");
+  }
+
   async loadSettings() {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
-    this.widthStore = data?.columnWidths || {};
+    const savedVersion = data?.version || "0.0.0";
+
+    if (savedVersion !== "1.1.0") {
+      this.widthStore = {};
+      await this.saveData({
+        version: "1.1.0",
+        settings: this.settings,
+        columnWidths: {},
+      });
+    } else {
+      this.widthStore = data?.columnWidths || {};
+    }
   }
 
   async saveSettings() {
     await this.saveData({
+      version: "1.1.0",
       settings: this.settings,
       columnWidths: this.widthStore,
     });

@@ -1,9 +1,14 @@
 import { Plugin } from "obsidian";
 
 export function getTableId(tableEl: HTMLTableElement): string {
+  const sourcePath = tableEl.getAttribute("data-source-path");
+  const lineStart = tableEl.getAttribute("data-line-start");
+  if (sourcePath && lineStart) {
+    return `table-${sourcePath}-${lineStart}`;
+  }
   const text = tableEl.textContent || "";
   const hash = text.slice(0, 100).replace(/\s+/g, " ").trim();
-  return `table-${hash.length}-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`;
+  return `table-fallback-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`;
 }
 
 export interface WidthStore {
@@ -24,6 +29,7 @@ export function saveWidths(
   }
   (plugin as any).widthStore = store;
   plugin.saveData({
+    version: "1.1.0",
     settings: (plugin as any).settings,
     columnWidths: store,
   });
@@ -41,15 +47,14 @@ export function applySavedWidths(
   tableEl: HTMLTableElement,
   widths: (number | null)[]
 ): void {
-  for (const row of Array.from(tableEl.querySelectorAll("tr"))) {
-    for (let i = 0; i < row.children.length && i < widths.length; i++) {
-      const w = widths[i];
-      if (w !== null) {
-        const el = row.children[i] as HTMLElement;
-        el.style.width = w + "px";
-        el.style.minWidth = w + "px";
-        el.style.maxWidth = w + "px";
-      }
+  const cols = tableEl.querySelectorAll("colgroup col");
+  for (let i = 0; i < cols.length && i < widths.length; i++) {
+    const w = widths[i];
+    if (w !== null) {
+      const col = cols[i] as HTMLElement;
+      col.style.width = w + "px";
+      col.style.minWidth = w + "px";
+      col.style.maxWidth = w + "px";
     }
   }
 }
