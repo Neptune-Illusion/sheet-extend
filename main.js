@@ -41,32 +41,35 @@ var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
     super(app, plugin);
     this.plugin = plugin;
   }
+  get settings() {
+    return this.plugin.settings;
+  }
+  async updateSettings(changes) {
+    Object.assign(this.plugin.settings, changes);
+    await this.plugin.saveSettings();
+  }
   display() {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Sheet Extend Settings" });
     new import_obsidian.Setting(containerEl).setName("Minimum column width").setDesc("Minimum width for a resized column (px)").addSlider(
-      (slider) => slider.setLimits(30, 100, 5).setValue(this.plugin.settings.minWidth).onChange(async (value) => {
-        this.plugin.settings.minWidth = value;
-        await this.plugin.saveSettings();
+      (slider) => slider.setLimits(30, 100, 5).setValue(this.settings.minWidth).onChange(async (value) => {
+        await this.updateSettings({ minWidth: value });
       })
     );
     new import_obsidian.Setting(containerEl).setName("Maximum column width").setDesc("Maximum width for a resized column (px)").addSlider(
-      (slider) => slider.setLimits(200, 800, 10).setValue(this.plugin.settings.maxWidth).onChange(async (value) => {
-        this.plugin.settings.maxWidth = value;
-        await this.plugin.saveSettings();
+      (slider) => slider.setLimits(200, 800, 10).setValue(this.settings.maxWidth).onChange(async (value) => {
+        await this.updateSettings({ maxWidth: value });
       })
     );
     new import_obsidian.Setting(containerEl).setName("Default column width").setDesc("Default column width when resized (px)").addSlider(
-      (slider) => slider.setLimits(80, 300, 5).setValue(this.plugin.settings.defaultWidth).onChange(async (value) => {
-        this.plugin.settings.defaultWidth = value;
-        await this.plugin.saveSettings();
+      (slider) => slider.setLimits(80, 300, 5).setValue(this.settings.defaultWidth).onChange(async (value) => {
+        await this.updateSettings({ defaultWidth: value });
       })
     );
     new import_obsidian.Setting(containerEl).setName("Enable native table processing").setDesc("Automatically process all markdown tables (not just sheet code blocks)").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.nativeProcessing).onChange(async (value) => {
-        this.plugin.settings.nativeProcessing = value;
-        await this.plugin.saveSettings();
+      (toggle) => toggle.setValue(this.settings.nativeProcessing).onChange(async (value) => {
+        await this.updateSettings({ nativeProcessing: value });
       })
     );
   }
@@ -192,6 +195,14 @@ function renderTable(app, tableEl, parsed, sourcePath, component) {
   tableEl.removeAttribute("data-resizable");
   if (grid.length === 0)
     return;
+  const colCount = Math.max(...grid.map((row) => row.length));
+  const colgroup = tableEl.createEl("colgroup");
+  for (let i = 0; i < colCount; i++) {
+    const col = colgroup.createEl("col");
+    if (alignments[i]) {
+      col.setAttribute("data-align", alignments[i]);
+    }
+  }
   const headerCount = 1;
   const headerRows = grid.slice(0, headerCount);
   const dataRows = grid.slice(headerCount);
@@ -242,21 +253,41 @@ function renderTable(app, tableEl, parsed, sourcePath, component) {
   }
 }
 
+// src/sheet/detect.ts
+function hasMergeMarkers(text) {
+  const lines = text.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.includes("|"))
+      continue;
+    if (/^\|?(\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?$/.test(trimmed))
+      continue;
+    const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+    const stripped = inner.endsWith("|") ? inner.slice(0, -1) : inner;
+    const cells = stripped.split("|").map((c) => c.trim());
+    for (const cell of cells) {
+      if (cell === "<" || cell === "^") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // src/resizer/resizer.ts
 function makeTableResizable(plugin, tableEl, onWidthsChanged) {
+  var _a;
   if (tableEl.hasAttribute("data-resizable"))
     return;
   tableEl.setAttribute("data-resizable", "true");
-  const firstRow = tableEl.querySelector("tr");
-  if (!firstRow)
-    return;
-  const colCount = firstRow.children.length;
   const settings = plugin.settings;
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-    const cellIndex = cell.getAttribute("data-col");
-    if (cellIndex && parseInt(cellIndex) >= colCount - 1)
-      continue;
-    if (!cellIndex && cell.cellIndex >= colCount - 1)
+  const cols = Array.from(tableEl.querySelectorAll("colgroup col"));
+  if (cols.length === 0)
+    return;
+  const cells = Array.from(tableEl.querySelectorAll("th, td"));
+  for (const cell of cells) {
+    const index = Number((_a = cell.getAttribute("data-col")) != null ? _a : cell.cellIndex);
+    if (Number.isNaN(index) || index >= cols.length - 1)
       continue;
     cell.style.position = "relative";
     const handle = document.createElement("div");
@@ -267,14 +298,7 @@ function makeTableResizable(plugin, tableEl, onWidthsChanged) {
     handle.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const rows = Array.from(tableEl.querySelectorAll("tr"));
-      if (rows.length === 0)
-        return;
-      const idx = cellIndex ? parseInt(cellIndex) : cell.cellIndex;
-      if (idx === 0)
-        return;
-      const firstCell = rows[0].children[idx];
-      startWidth = firstCell.offsetWidth;
+      startWidth = cols[index].offsetWidth || cols[index].getBoundingClientRect().width;
       startX = e.clientX;
       tableEl.setAttribute("data-resizing", "true");
       document.body.classList.add("sheet-extend-resizing");
@@ -287,29 +311,18 @@ function makeTableResizable(plugin, tableEl, onWidthsChanged) {
         settings.minWidth,
         Math.min(settings.maxWidth, startWidth + diff)
       );
-      const idx = cellIndex ? parseInt(cellIndex) : cell.cellIndex;
-      for (const row of Array.from(tableEl.querySelectorAll("tr"))) {
-        const target = row.children[idx];
-        if (target) {
-          target.style.width = newWidth + "px";
-          target.style.minWidth = newWidth + "px";
-          target.style.maxWidth = newWidth + "px";
-        }
-      }
+      cols[index].style.width = newWidth + "px";
+      cols[index].style.minWidth = newWidth + "px";
+      cols[index].style.maxWidth = newWidth + "px";
     };
     const onMouseUp = () => {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       tableEl.removeAttribute("data-resizing");
       document.body.classList.remove("sheet-extend-resizing");
-      const widths = [];
-      const firstRow2 = tableEl.querySelector("tr");
-      if (firstRow2) {
-        for (let i = 0; i < firstRow2.children.length; i++) {
-          const el = firstRow2.children[i];
-          widths.push(el.style.width ? parseInt(el.style.width) : null);
-        }
-      }
+      const widths = cols.map(
+        (col) => col.style.width ? parseInt(col.style.width) : null
+      );
       onWidthsChanged(widths);
     };
   }
@@ -317,9 +330,14 @@ function makeTableResizable(plugin, tableEl, onWidthsChanged) {
 
 // src/resizer/persistence.ts
 function getTableId(tableEl) {
+  const sourcePath = tableEl.getAttribute("data-source-path");
+  const lineStart = tableEl.getAttribute("data-line-start");
+  if (sourcePath && lineStart) {
+    return `table-${sourcePath}-${lineStart}`;
+  }
   const text = tableEl.textContent || "";
   const hash = text.slice(0, 100).replace(/\s+/g, " ").trim();
-  return `table-${hash.length}-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`;
+  return `table-fallback-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`;
 }
 function saveWidths(plugin, tableId, widths) {
   const store = plugin.widthStore || {};
@@ -331,6 +349,7 @@ function saveWidths(plugin, tableId, widths) {
   }
   plugin.widthStore = store;
   plugin.saveData({
+    version: "1.1.0",
     settings: plugin.settings,
     columnWidths: store
   });
@@ -340,15 +359,14 @@ function loadWidths(plugin, tableId) {
   return store[tableId] || null;
 }
 function applySavedWidths(tableEl, widths) {
-  for (const row of Array.from(tableEl.querySelectorAll("tr"))) {
-    for (let i = 0; i < row.children.length && i < widths.length; i++) {
-      const w = widths[i];
-      if (w !== null) {
-        const el = row.children[i];
-        el.style.width = w + "px";
-        el.style.minWidth = w + "px";
-        el.style.maxWidth = w + "px";
-      }
+  const cols = tableEl.querySelectorAll("colgroup col");
+  for (let i = 0; i < cols.length && i < widths.length; i++) {
+    const w = widths[i];
+    if (w !== null) {
+      const col = cols[i];
+      col.style.width = w + "px";
+      col.style.minWidth = w + "px";
+      col.style.maxWidth = w + "px";
     }
   }
 }
@@ -395,7 +413,7 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
       for (const tr of Array.from(tableEl.querySelectorAll("tr"))) {
         const cells = [];
         for (const td of Array.from(tr.querySelectorAll("th, td"))) {
-          cells.push(td.textContent || "");
+          cells.push(td.innerHTML || "");
         }
         rows.push("| " + cells.join(" | ") + " |");
       }
@@ -405,6 +423,14 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
         const delim = "| " + Array(colCount).fill("---").join(" | ") + " |";
         sourceText = rows[0] + "\n" + delim + "\n" + rows.slice(1).join("\n");
       }
+    }
+    if (!hasMergeMarkers(sourceText)) {
+      const savedWidths2 = loadWidths(this, tableId);
+      if (savedWidths2) {
+        applySavedWidths(tableEl, savedWidths2);
+      }
+      this.setupResizer(tableEl);
+      return;
     }
     const parsed = parseAndMerge(sourceText);
     renderTable(this.app, tableEl, parsed, context.sourcePath || "", this);
@@ -420,13 +446,27 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
       saveWidths(this, tableId, widths);
     });
   }
+  onunload() {
+    document.body.classList.remove("sheet-extend-resizing");
+  }
   async loadSettings() {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data == null ? void 0 : data.settings);
-    this.widthStore = (data == null ? void 0 : data.columnWidths) || {};
+    const savedVersion = (data == null ? void 0 : data.version) || "0.0.0";
+    if (savedVersion !== "1.1.1") {
+      this.widthStore = {};
+      await this.saveData({
+        version: "1.1.1",
+        settings: this.settings,
+        columnWidths: {}
+      });
+    } else {
+      this.widthStore = (data == null ? void 0 : data.columnWidths) || {};
+    }
   }
   async saveSettings() {
     await this.saveData({
+      version: "1.1.1",
       settings: this.settings,
       columnWidths: this.widthStore
     });

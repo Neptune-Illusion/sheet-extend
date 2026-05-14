@@ -66,7 +66,9 @@ export default class SheetExtendPlugin extends Plugin {
       for (const tr of Array.from(tableEl.querySelectorAll("tr"))) {
         const cells: string[] = [];
         for (const td of Array.from(tr.querySelectorAll("th, td"))) {
-          cells.push(td.textContent || "");
+          // Use innerHTML to preserve HTML tags (e.g. <font>, <br>)
+          // instead of textContent which strips them
+          cells.push((td as HTMLElement).innerHTML || "");
         }
         rows.push("| " + cells.join(" | ") + " |");
       }
@@ -114,10 +116,10 @@ export default class SheetExtendPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
     const savedVersion = data?.version || "0.0.0";
 
-    if (savedVersion !== "1.1.0") {
+    if (savedVersion !== "1.1.1") {
       this.widthStore = {};
       await this.saveData({
-        version: "1.1.0",
+        version: "1.1.1",
         settings: this.settings,
         columnWidths: {},
       });
@@ -128,7 +130,7 @@ export default class SheetExtendPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData({
-      version: "1.1.0",
+      version: "1.1.1",
       settings: this.settings,
       columnWidths: this.widthStore,
     });
