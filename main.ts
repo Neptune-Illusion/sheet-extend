@@ -49,6 +49,71 @@ export default class SheetExtendPlugin extends Plugin {
     });
   }
 
+  /**
+   * Extract the raw markdown source for a table from the editor document.
+   * In Live Preview mode, getSectionInfo often returns null and the DOM
+   * may have already processed special characters like ^ (footnote marker).
+   * This method reads directly from the CM6 editor to get untouched source.
+   */
+  private getSourceFromEditor(): string | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return null;
+    // Access the editor's full document value
+    const editor = view.editor;
+    if (!editor) return null;
+    return editor.getValue();
+  }
+
+  /**
+   * Given the full document text, find the table block that contains
+   * the approximate content matching the DOM table.
+   * Returns the raw markdown table text or null if not found.
+   */
+  private findTableInDocument(docText: string, tableEl: HTMLTableElement): string | null {
+    const lines = docText.split("\n");
+    const tableBlocks: { start: number; end: number }[] = [];
+
+    let inTable = false;
+    let blockStart = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      const isTableLine = trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
+
+      if (isTableLine && !inTable) {
+        inTable = true;
+        blockStart = i;
+      } else if (!isTableLine && inTable) {
+        inTable = false;
+        tableBlocks.push({ start: blockStart, end: i - 1 });
+      }
+    }
+    if (inTable) {
+      tableBlocks.push({ start: blockStart, end: lines.length - 1 });
+    }
+
+    if (tableBlocks.length === 0) return null;
+
+    // Try to match by checking which table block contains merge markers
+    // and has a similar column count to the DOM table
+    const domColCount = tableEl.querySelector("tr")?.children.length || 0;
+
+    for (const block of tableBlocks) {
+      const blockText = lines.slice(block.start, block.end + 1).join("\n");
+      if (hasMergeMarkers(blockText)) {
+        // Verify column count roughly matches
+        const firstLine = lines[block.start];
+        const colCount = (firstLine.match(/\|/g) || []).length - 1;
+        if (domColCount === 0 || Math.abs(colCount - domColCount) <= 1) {
+          return blockText;
+        }
+      }
+    }
+
+    // If no merge-marker table found, return null (no special processing needed)
+    return null;
+  }
+
   private processTable(tableEl: HTMLTableElement, context: any) {
     const tableId = getTableId(tableEl);
 

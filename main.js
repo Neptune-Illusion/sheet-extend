@@ -456,6 +456,61 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
       });
     });
   }
+  /**
+   * Extract the raw markdown source for a table from the editor document.
+   * In Live Preview mode, getSectionInfo often returns null and the DOM
+   * may have already processed special characters like ^ (footnote marker).
+   * This method reads directly from the CM6 editor to get untouched source.
+   */
+  getSourceFromEditor() {
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
+    if (!view)
+      return null;
+    const editor = view.editor;
+    if (!editor)
+      return null;
+    return editor.getValue();
+  }
+  /**
+   * Given the full document text, find the table block that contains
+   * the approximate content matching the DOM table.
+   * Returns the raw markdown table text or null if not found.
+   */
+  findTableInDocument(docText, tableEl) {
+    var _a;
+    const lines = docText.split("\n");
+    const tableBlocks = [];
+    let inTable = false;
+    let blockStart = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      const isTableLine = trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
+      if (isTableLine && !inTable) {
+        inTable = true;
+        blockStart = i;
+      } else if (!isTableLine && inTable) {
+        inTable = false;
+        tableBlocks.push({ start: blockStart, end: i - 1 });
+      }
+    }
+    if (inTable) {
+      tableBlocks.push({ start: blockStart, end: lines.length - 1 });
+    }
+    if (tableBlocks.length === 0)
+      return null;
+    const domColCount = ((_a = tableEl.querySelector("tr")) == null ? void 0 : _a.children.length) || 0;
+    for (const block of tableBlocks) {
+      const blockText = lines.slice(block.start, block.end + 1).join("\n");
+      if (hasMergeMarkers(blockText)) {
+        const firstLine = lines[block.start];
+        const colCount = (firstLine.match(/\|/g) || []).length - 1;
+        if (domColCount === 0 || Math.abs(colCount - domColCount) <= 1) {
+          return blockText;
+        }
+      }
+    }
+    return null;
+  }
   processTable(tableEl, context) {
     var _a;
     const tableId = getTableId(tableEl);
