@@ -53,6 +53,8 @@ export default class SheetExtendPlugin extends Plugin {
     const tableId = getTableId(tableEl);
 
     let sourceText = "";
+
+    // Strategy 1: getSectionInfo() — works in Reading mode
     if (context.getSectionInfo) {
       const sectionInfo = context.getSectionInfo(tableEl);
       if (sectionInfo) {
@@ -61,13 +63,23 @@ export default class SheetExtendPlugin extends Plugin {
       }
     }
 
+    // Strategy 2: Read raw markdown from the editor document.
+    // Fallback when getSectionInfo returns null (e.g. in Live Preview or
+    // certain embedded contexts). The editor's raw text preserves merge markers.
+    if (!sourceText) {
+      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (view && view.editor) {
+        const fullDoc = view.editor.getValue();
+        sourceText = this.findTableInSource(fullDoc, tableEl);
+      }
+    }
+
+    // Strategy 3: DOM innerHTML fallback — last resort
     if (!sourceText) {
       const rows: string[] = [];
       for (const tr of Array.from(tableEl.querySelectorAll("tr"))) {
         const cells: string[] = [];
         for (const td of Array.from(tr.querySelectorAll("th, td"))) {
-          // Use innerHTML to preserve HTML tags (e.g. <font>, <br>)
-          // instead of textContent which strips them
           cells.push((td as HTMLElement).innerHTML || "");
         }
         rows.push("| " + cells.join(" | ") + " |");
@@ -100,6 +112,49 @@ export default class SheetExtendPlugin extends Plugin {
     this.setupResizer(tableEl);
   }
 
+  /**
+   * Locate the raw markdown table block in the full document source that
+   * corresponds to the rendered table element. Matches by comparing the
+   * text content of the first header row cells against source lines.
+   */
+  private findTableInSource(fullDoc: string, tableEl: HTMLTableElement): string {
+    const lines = fullDoc.split("\n");
+
+    const headerRow = tableEl.querySelector("tr");
+    if (!headerRow) return "";
+    const headerCells: string[] = [];
+    for (const th of Array.from(headerRow.querySelectorAll("th, td"))) {
+      const text = (th as HTMLElement).textContent?.trim() || "";
+      if (text) headerCells.push(text);
+    }
+    if (headerCells.length === 0) return "";
+
+    let tableStartIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith("|")) continue;
+      const allMatch = headerCells.every((cell) => line.includes(cell));
+      if (allMatch) {
+        tableStartIdx = i;
+        break;
+      }
+    }
+
+    if (tableStartIdx < 0) return "";
+
+    let tableEndIdx = tableStartIdx;
+    for (let i = tableStartIdx + 1; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (trimmed.startsWith("|")) {
+        tableEndIdx = i;
+      } else {
+        break;
+      }
+    }
+
+    return lines.slice(tableStartIdx, tableEndIdx + 1).join("\n");
+  }
+
   private setupResizer(tableEl: HTMLTableElement) {
     const tableId = getTableId(tableEl);
     makeTableResizable(this, tableEl, (widths) => {
@@ -116,10 +171,10 @@ export default class SheetExtendPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
     const savedVersion = data?.version || "0.0.0";
 
-    if (savedVersion !== "1.1.2") {
+    if (savedVersion !== "1.3.0") {
       this.widthStore = {};
       await this.saveData({
-        version: "1.1.2",
+        version: "1.3.0",
         settings: this.settings,
         columnWidths: {},
       });
@@ -130,7 +185,7 @@ export default class SheetExtendPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData({
-      version: "1.1.2",
+      version: "1.3.0",
       settings: this.settings,
       columnWidths: this.widthStore,
     });
