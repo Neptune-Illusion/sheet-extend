@@ -6,6 +6,33 @@ import { hasMergeMarkers } from "./src/sheet/detect";
 import { makeTableResizable } from "./src/resizer/resizer";
 import { getTableId, saveWidths, loadWidths, applySavedWidths } from "./src/resizer/persistence";
 
+/**
+ * Ensure a table has a <colgroup> with one <col> per column.
+ * Native Obsidian-rendered tables (plain tables without ^/< merge markers) have
+ * no colgroup, but the resizer and applySavedWidths both operate on colgroup>col.
+ * Injecting one lets plain tables reuse the existing resize/persistence path.
+ * Idempotent: does nothing if a colgroup already exists (post processor may fire
+ * multiple times on the same table).
+ */
+function ensureColgroup(tableEl: HTMLTableElement): void {
+  if (tableEl.querySelector("colgroup")) return;
+
+  // Determine column count from the first row's cells (header row preferred).
+  const firstRow =
+    tableEl.querySelector("thead tr") || tableEl.querySelector("tr");
+  if (!firstRow) return;
+  const colCount = firstRow.querySelectorAll("th, td").length;
+  if (colCount === 0) return;
+
+  const colgroup = document.createElement("colgroup");
+  for (let i = 0; i < colCount; i++) {
+    colgroup.appendChild(document.createElement("col"));
+  }
+  // colgroup must precede thead/tbody in the table.
+  tableEl.insertBefore(colgroup, tableEl.firstChild);
+}
+
+
 class SheetExtendRenderChild extends MarkdownRenderChild {
   constructor(
     containerEl: HTMLElement,
@@ -158,6 +185,11 @@ export default class SheetExtendPlugin extends Plugin {
     }
 
     if (!hasMergeMarkers(sourceText)) {
+      // Plain tables (no ^/< merge markers) are rendered natively by Obsidian
+      // and have no <colgroup>. The resizer and applySavedWidths both operate
+      // on colgroup > col, so without it they no-op. Inject one so plain tables
+      // become resizable too, reusing the existing resizer/persistence path.
+      ensureColgroup(tableEl);
       const savedWidths = loadWidths(this, tableId);
       if (savedWidths) {
         applySavedWidths(tableEl, savedWidths);
