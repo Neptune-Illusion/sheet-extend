@@ -34,7 +34,10 @@ var DEFAULT_SETTINGS = {
   minWidth: 50,
   maxWidth: 500,
   defaultWidth: 150,
-  nativeProcessing: true
+  nativeProcessing: true,
+  widthPersistence: "plugin",
+  pixelsPerDash: 8,
+  enableFormulas: true
 };
 var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -70,6 +73,21 @@ var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("Enable native table processing").setDesc("Automatically process all markdown tables (not just sheet code blocks)").addToggle(
       (toggle) => toggle.setValue(this.settings.nativeProcessing).onChange(async (value) => {
         await this.updateSettings({ nativeProcessing: value });
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Store column widths in Markdown").setDesc("Write resized column widths into the table separator row using dash counts").addToggle(
+      (toggle) => toggle.setValue(this.settings.widthPersistence === "markdown").onChange(async (value) => {
+        await this.updateSettings({ widthPersistence: value ? "markdown" : "plugin" });
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Pixels per separator dash").setDesc("Used when storing column widths in Markdown").addSlider(
+      (slider) => slider.setLimits(4, 20, 1).setValue(this.settings.pixelsPerDash).onChange(async (value) => {
+        await this.updateSettings({ pixelsPerDash: value });
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Enable table formulas").setDesc("Render =sum, =avg, =count, =max, and =min in enhanced tables").addToggle(
+      (toggle) => toggle.setValue(this.settings.enableFormulas).onChange(async (value) => {
+        await this.updateSettings({ enableFormulas: value });
       })
     );
   }
@@ -313,6 +331,167 @@ function hasMergeMarkers(text) {
   return false;
 }
 
+// src/sheet/formulas.ts
+function parseFormula(text) {
+  const match = text.trim().toLowerCase().match(/^=(sum|avg|count|max|min)$/);
+  return match ? match[1] : null;
+}
+function parseNumber(text) {
+  const normalized = text.replace(/,/g, "").trim();
+  if (!normalized)
+    return null;
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+function formatNumber(value) {
+  if (Number.isInteger(value))
+    return String(value);
+  return String(Number(value.toFixed(4)));
+}
+function calculateFormula(name, values) {
+  if (name === "count")
+    return String(values.length);
+  if (!values.length)
+    return "";
+  if (name === "sum")
+    return formatNumber(values.reduce((sum, value) => sum + value, 0));
+  if (name === "avg")
+    return formatNumber(values.reduce((sum, value) => sum + value, 0) / values.length);
+  if (name === "max")
+    return formatNumber(Math.max(...values));
+  return formatNumber(Math.min(...values));
+}
+function applyFormulas(parsed) {
+  var _a;
+  const grid = parsed.grid.map((row) => row.map((cell) => ({ ...cell })));
+  const originalGrid = parsed.grid;
+  for (let row = 1; row < grid.length; row++) {
+    for (let col = 0; col < grid[row].length; col++) {
+      const cell = grid[row][col];
+      if (cell.hidden)
+        continue;
+      const formula = parseFormula(cell.text);
+      if (!formula)
+        continue;
+      const values = [];
+      for (let sourceRow = 1; sourceRow < row; sourceRow++) {
+        const sourceCell = (_a = originalGrid[sourceRow]) == null ? void 0 : _a[col];
+        if (!sourceCell || sourceCell.hidden)
+          continue;
+        if (parseFormula(sourceCell.text))
+          continue;
+        const value = parseNumber(sourceCell.text);
+        if (value !== null)
+          values.push(value);
+      }
+      cell.text = calculateFormula(formula, values);
+    }
+  }
+  return {
+    ...parsed,
+    grid
+  };
+}
+
+// src/sheet/markdown-table.ts
+function isMarkdownTableLine(line) {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
+}
+function splitMarkdownRow(line) {
+  if (!line.includes("|"))
+    return [];
+  let normalized = line.trim();
+  if (normalized.startsWith("|"))
+    normalized = normalized.slice(1);
+  if (normalized.endsWith("|"))
+    normalized = normalized.slice(0, -1);
+  return normalized.split("|").map((cell) => cell.trim());
+}
+function parseSeparatorLine(line) {
+  const cells = splitMarkdownRow(line);
+  if (!cells.length)
+    return null;
+  const columns = [];
+  for (const cell of cells) {
+    const match = cell.match(/^(:)?(-{3,})(:)?$/);
+    if (!match)
+      return null;
+    columns.push({
+      alignLeft: !!match[1],
+      alignRight: !!match[3],
+      dashCount: match[2].length
+    });
+  }
+  return columns;
+}
+function buildSeparatorLine(columns, dashCounts) {
+  return `| ${dashCounts.map((dashCount, index) => {
+    const column = columns[index] || { alignLeft: false, alignRight: false, dashCount: 3 };
+    const dashes = "-".repeat(Math.max(3, dashCount));
+    return `${column.alignLeft ? ":" : ""}${dashes}${column.alignRight ? ":" : ""}`;
+  }).join(" | ")} |`;
+}
+function extractMarkdownTableSpecs(markdown) {
+  const lines = markdown.split("\n");
+  const specs = [];
+  for (let separatorLine = 1; separatorLine < lines.length; separatorLine++) {
+    const columns = parseSeparatorLine(lines[separatorLine]);
+    if (!columns)
+      continue;
+    if (!isMarkdownTableLine(lines[separatorLine - 1]))
+      continue;
+    const headerLine = separatorLine - 1;
+    const bodyLines = [];
+    let endLine = separatorLine;
+    for (let line = separatorLine + 1; line < lines.length; line++) {
+      if (!isMarkdownTableLine(lines[line]))
+        break;
+      bodyLines.push(lines[line]);
+      endLine = line;
+    }
+    const tableLines = lines.slice(headerLine, endLine + 1);
+    specs.push({
+      text: tableLines.join("\n"),
+      range: { startLine: headerLine, endLine },
+      tableOrdinal: specs.length,
+      headerCells: splitMarkdownRow(lines[headerLine]),
+      bodyLines,
+      columns,
+      rawSeparatorLine: lines[separatorLine]
+    });
+    separatorLine = endLine;
+  }
+  return specs;
+}
+function normalizeSignatureCell(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+function markdownTableSignature(spec) {
+  return [spec.headerCells, ...spec.bodyLines.map(splitMarkdownRow)].map((row) => row.map(normalizeSignatureCell).join("|")).join("\n");
+}
+function domTableSignature(tableEl) {
+  return Array.from(tableEl.rows).map(
+    (row) => Array.from(row.cells).map((cell) => normalizeSignatureCell(cell.textContent || "")).join("|")
+  ).join("\n");
+}
+function updateSeparatorLineForWidths(documentText, range, widths, pixelsPerDash) {
+  const lines = documentText.split("\n");
+  const separatorLineIndex = range.startLine + 1;
+  const separatorLine = lines[separatorLineIndex];
+  const columns = parseSeparatorLine(separatorLine);
+  if (!columns)
+    return null;
+  const dashCounts = columns.map((column, index) => {
+    const width = widths[index];
+    if (typeof width !== "number" || Number.isNaN(width))
+      return column.dashCount;
+    return Math.max(3, Math.round(width / pixelsPerDash));
+  });
+  lines[separatorLineIndex] = buildSeparatorLine(columns, dashCounts);
+  return lines.join("\n");
+}
+
 // src/resizer/resizer.ts
 function makeTableResizable(plugin, tableEl, onWidthsChanged) {
   var _a;
@@ -325,7 +504,8 @@ function makeTableResizable(plugin, tableEl, onWidthsChanged) {
     return;
   const cells = Array.from(tableEl.querySelectorAll("th, td"));
   for (const cell of cells) {
-    const index = Number((_a = cell.getAttribute("data-col")) != null ? _a : cell.cellIndex);
+    const startIndex = Number((_a = cell.getAttribute("data-col")) != null ? _a : cell.cellIndex);
+    const index = startIndex + (cell.colSpan || 1) - 1;
     if (Number.isNaN(index) || index >= cols.length - 1)
       continue;
     cell.style.position = "relative";
@@ -388,7 +568,7 @@ function saveWidths(plugin, tableId, widths) {
   }
   plugin.widthStore = store;
   plugin.saveData({
-    version: "1.1.0",
+    version: "1.3.0",
     settings: plugin.settings,
     columnWidths: store
   });
@@ -626,14 +806,14 @@ var MergeInteraction = class {
       return;
     const menu = new import_obsidian3.Menu();
     menu.addItem((item) => {
-      item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!selectionHasHorizontalSpan(selection)).onClick(() => this.merge("horizontal"));
+      item.setTitle("Merge selected cells horizontally (Mod+Shift+Right)").setIcon("columns-3").setDisabled(!selectionHasHorizontalSpan(selection)).onClick(() => this.merge("horizontal"));
     });
     menu.addItem((item) => {
-      item.setTitle("Merge selected cells vertically").setIcon("rows-3").setDisabled(!selectionHasVerticalSpan(selection)).onClick(() => this.merge("vertical"));
+      item.setTitle("Merge selected cells vertically (Mod+Shift+Down)").setIcon("rows-3").setDisabled(!selectionHasVerticalSpan(selection)).onClick(() => this.merge("vertical"));
     });
     menu.addSeparator();
     menu.addItem((item) => {
-      item.setTitle("Unmerge selected cells").setIcon("split-square-horizontal").onClick(() => this.unmerge());
+      item.setTitle("Unmerge selected cells (Mod+Shift+Left)").setIcon("split-square-horizontal").onClick(() => this.unmerge());
     });
     menu.showAtMouseEvent(evt);
   }
@@ -684,10 +864,7 @@ function runUnmergeCommand(app, range, selection) {
 function ensureColgroup(tableEl) {
   if (tableEl.querySelector("colgroup"))
     return;
-  const firstRow = tableEl.querySelector("thead tr") || tableEl.querySelector("tr");
-  if (!firstRow)
-    return;
-  const colCount = firstRow.querySelectorAll("th, td").length;
+  const colCount = getLogicalColumnCount(tableEl);
   if (colCount === 0)
     return;
   const colgroup = document.createElement("colgroup");
@@ -696,12 +873,25 @@ function ensureColgroup(tableEl) {
   }
   tableEl.insertBefore(colgroup, tableEl.firstChild);
 }
+function getLogicalColumnCount(tableEl) {
+  let colCount = 0;
+  for (const row of Array.from(tableEl.rows)) {
+    let width = 0;
+    for (const cell of Array.from(row.cells)) {
+      width += cell.colSpan || 1;
+    }
+    colCount = Math.max(colCount, width);
+  }
+  return colCount;
+}
 var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
     this.widthStore = {};
     this.tableRanges = /* @__PURE__ */ new WeakMap();
     this.activeMergeSelection = null;
+    this.refreshTimer = null;
+    this.observer = null;
   }
   async onload() {
     await this.loadSettings();
@@ -717,7 +907,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       }
     });
     this.registerMarkdownCodeBlockProcessor("sheet", (source, el, ctx) => {
-      const parsed = parseAndMerge(source);
+      const parsed = this.settings.enableFormulas ? applyFormulas(parseAndMerge(source)) : parseAndMerge(source);
       const tableEl = el.createEl("table");
       renderTable(this.app, tableEl, parsed, ctx.sourcePath, this);
       this.setupResizer(tableEl);
@@ -745,8 +935,16 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     this.addCommand({
       id: "unmerge-table-cells",
       name: "Unmerge selected table cells",
-      checkCallback: (checking) => this.runActiveUnmergeCommand(checking)
+      checkCallback: (checking) => this.runActiveUnmergeCommand(checking),
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowLeft" }]
     });
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleLivePreviewRefresh()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.scheduleLivePreviewRefresh()));
+    this.registerEvent(this.app.workspace.on("file-open", () => this.scheduleLivePreviewRefresh()));
+    this.registerEvent(this.app.workspace.on("editor-change", () => this.scheduleLivePreviewRefresh()));
+    this.registerDomEvent(window, "resize", () => this.scheduleLivePreviewRefresh());
+    this.observeWorkspaceTables();
+    this.scheduleLivePreviewRefresh();
   }
   /**
    * Extract the raw markdown source for a table from the editor document.
@@ -804,18 +1002,35 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     return null;
   }
   processTable(tableEl, context) {
-    var _a;
+    if (!tableEl.isConnected)
+      return;
+    const match = this.resolveTableSource(tableEl, context);
     const tableId = getTableId(tableEl);
+    if (!match || !hasMergeMarkers(match.text)) {
+      this.enhancePlainTable(tableEl);
+      return;
+    }
+    const parsed = this.settings.enableFormulas ? applyFormulas(parseAndMerge(match.text)) : parseAndMerge(match.text);
+    renderTable(this.app, tableEl, parsed, match.sourcePath, this);
+    tableEl.setAttribute("data-source-path", match.sourcePath);
+    tableEl.setAttribute("data-line-start", String(match.range.startLine));
+    this.tableRanges.set(tableEl, match.range);
+    this.applyInitialWidths(tableEl, tableId, match.text);
+    this.setupResizer(tableEl);
+    this.setupMergeInteraction(tableEl);
+  }
+  resolveTableSource(tableEl, context) {
     let sourceText = "";
+    let range = null;
     if (context.getSectionInfo) {
       const sectionInfo = context.getSectionInfo(tableEl);
       if (sectionInfo) {
         const lines = sectionInfo.text.split("\n");
         sourceText = lines.slice(sectionInfo.lineStart, sectionInfo.lineEnd + 1).join("\n");
-        this.tableRanges.set(tableEl, {
+        range = {
           startLine: sectionInfo.lineStart,
           endLine: sectionInfo.lineEnd
-        });
+        };
       }
     }
     if (!sourceText) {
@@ -824,50 +1039,64 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
         const fullDoc = view.editor.getValue();
         const match = this.findTableInSource(fullDoc, tableEl);
         sourceText = (match == null ? void 0 : match.text) || "";
-        if (match)
-          this.tableRanges.set(tableEl, match.range);
+        range = (match == null ? void 0 : match.range) || null;
       }
     }
-    if (!sourceText) {
-      const rows = [];
-      for (const tr of Array.from(tableEl.querySelectorAll("tr"))) {
-        const cells = [];
-        for (const td of Array.from(tr.querySelectorAll("th, td"))) {
-          cells.push(td.innerHTML || "");
-        }
-        rows.push("| " + cells.join(" | ") + " |");
-      }
-      sourceText = rows.join("\n");
-      if (rows.length > 1) {
-        const colCount = ((_a = tableEl.querySelector("tr")) == null ? void 0 : _a.children.length) || 1;
-        const delim = "| " + Array(colCount).fill("---").join(" | ") + " |";
-        sourceText = rows[0] + "\n" + delim + "\n" + rows.slice(1).join("\n");
-      }
+    if (!sourceText || !range)
+      return null;
+    return { text: sourceText, range, sourcePath: context.sourcePath || "" };
+  }
+  enhancePlainTable(tableEl) {
+    var _a;
+    ensureColgroup(tableEl);
+    const range = this.getRangeForPlainTable(tableEl);
+    if (range) {
+      this.tableRanges.set(tableEl, range);
     }
-    if (!hasMergeMarkers(sourceText)) {
-      ensureColgroup(tableEl);
-      const savedWidths2 = loadWidths(this, tableId);
-      if (savedWidths2) {
-        applySavedWidths(tableEl, savedWidths2);
-      }
-      this.setupResizer(tableEl);
-      return;
-    }
-    const parsed = parseAndMerge(sourceText);
-    renderTable(this.app, tableEl, parsed, context.sourcePath || "", this);
-    const savedWidths = loadWidths(this, tableId);
-    if (savedWidths) {
-      applySavedWidths(tableEl, savedWidths);
-    }
+    const tableId = getTableId(tableEl);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    const match = this.resolveTableSource(tableEl, { sourcePath: ((_a = view == null ? void 0 : view.file) == null ? void 0 : _a.path) || "" });
+    this.applyInitialWidths(tableEl, tableId, (match == null ? void 0 : match.text) || "");
     this.setupResizer(tableEl);
+    this.addCellCoordinates(tableEl);
+    this.setupMergeInteraction(tableEl);
+  }
+  addCellCoordinates(tableEl) {
+    const occupied = /* @__PURE__ */ new Map();
+    for (let rowIndex = 0; rowIndex < tableEl.rows.length; rowIndex++) {
+      const row = tableEl.rows[rowIndex];
+      let logicalCol = 0;
+      for (const cell of Array.from(row.cells)) {
+        while (occupied.has(`${rowIndex}:${logicalCol}`)) {
+          logicalCol++;
+        }
+        cell.setAttribute("data-row", String(rowIndex));
+        cell.setAttribute("data-col", String(logicalCol));
+        for (let r = 0; r < (cell.rowSpan || 1); r++) {
+          for (let c = 0; c < (cell.colSpan || 1); c++) {
+            occupied.set(`${rowIndex + r}:${logicalCol + c}`, true);
+          }
+        }
+        logicalCol += cell.colSpan || 1;
+      }
+    }
+  }
+  setupMergeInteraction(tableEl) {
     installMergeInteraction({
       app: this.app,
       component: this,
       getTableRange: (table) => this.tableRanges.get(table) || null,
-      setActiveSelection: (context2) => {
-        this.activeMergeSelection = context2;
+      setActiveSelection: (context) => {
+        this.activeMergeSelection = context;
       }
     }, tableEl);
+  }
+  getRangeForPlainTable(tableEl) {
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    if (!(view == null ? void 0 : view.editor))
+      return null;
+    const match = this.findTableInSource(view.editor.getValue(), tableEl);
+    return (match == null ? void 0 : match.range) || null;
   }
   runActiveMergeCommand(checking, direction) {
     const active = this.activeMergeSelection;
@@ -901,6 +1130,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   findTableInSource(fullDoc, tableEl) {
     var _a;
     const lines = fullDoc.split("\n");
+    const tableSpecs = extractMarkdownTableSpecs(fullDoc);
     const headerRow = tableEl.querySelector("tr");
     if (!headerRow)
       return null;
@@ -910,8 +1140,15 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       if (text)
         headerCells.push(text);
     }
-    if (headerCells.length === 0)
-      return null;
+    const domSignature = domTableSignature(tableEl);
+    const signatureMatch = tableSpecs.find((spec) => markdownTableSignature(spec) === domSignature);
+    if (signatureMatch) {
+      return { text: signatureMatch.text, range: signatureMatch.range };
+    }
+    if (headerCells.length === 0) {
+      const first = tableSpecs[0];
+      return first ? { text: first.text, range: first.range } : null;
+    }
     let tableStartIdx = -1;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -942,11 +1179,96 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   setupResizer(tableEl) {
     const tableId = getTableId(tableEl);
     makeTableResizable(this, tableEl, (widths) => {
-      saveWidths(this, tableId, widths);
+      if (!this.writeWidthsToMarkdown(tableEl, widths)) {
+        saveWidths(this, tableId, widths);
+      }
+    });
+  }
+  applyInitialWidths(tableEl, tableId, tableText) {
+    if (this.settings.widthPersistence === "markdown" && tableText) {
+      const specs = extractMarkdownTableSpecs(tableText);
+      const spec = specs[0];
+      if (spec == null ? void 0 : spec.columns.length) {
+        applySavedWidths(
+          tableEl,
+          spec.columns.map((column) => column.dashCount * this.settings.pixelsPerDash)
+        );
+        return;
+      }
+    }
+    const savedWidths = loadWidths(this, tableId);
+    if (savedWidths) {
+      applySavedWidths(tableEl, savedWidths);
+    }
+  }
+  writeWidthsToMarkdown(tableEl, widths) {
+    if (this.settings.widthPersistence !== "markdown")
+      return false;
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    const editor = view == null ? void 0 : view.editor;
+    const range = this.tableRanges.get(tableEl);
+    if (!editor || !range)
+      return false;
+    const nextText = updateSeparatorLineForWidths(
+      editor.getValue(),
+      range,
+      widths,
+      this.settings.pixelsPerDash
+    );
+    if (!nextText)
+      return false;
+    editor.setValue(nextText);
+    editor.setCursor({ line: range.startLine + 1, ch: 0 });
+    return true;
+  }
+  scheduleLivePreviewRefresh() {
+    if (this.refreshTimer !== null) {
+      window.clearTimeout(this.refreshTimer);
+    }
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshTimer = null;
+      this.refreshLivePreviewTables();
+    }, 80);
+  }
+  refreshLivePreviewTables() {
+    var _a;
+    if (!this.settings.nativeProcessing)
+      return;
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    if (!(view == null ? void 0 : view.contentEl))
+      return;
+    const sourcePath = ((_a = view.file) == null ? void 0 : _a.path) || "";
+    const tables = Array.from(
+      view.contentEl.querySelectorAll("table:not([id='obsidian-sheets-parsed'])")
+    ).filter((table) => table instanceof HTMLTableElement);
+    for (const tableEl of tables) {
+      this.processTable(tableEl, { sourcePath });
+    }
+  }
+  observeWorkspaceTables() {
+    this.observer = new MutationObserver((mutations) => {
+      if (mutations.some(
+        (mutation) => Array.from(mutation.addedNodes).some(
+          (node) => node instanceof HTMLElement && (node.matches("table") || !!node.querySelector("table"))
+        )
+      )) {
+        this.scheduleLivePreviewRefresh();
+      }
+    });
+    this.observer.observe(document.body, { childList: true, subtree: true });
+    this.register(() => {
+      var _a;
+      return (_a = this.observer) == null ? void 0 : _a.disconnect();
     });
   }
   onunload() {
+    var _a;
     document.body.classList.remove("sheet-extend-resizing");
+    if (this.refreshTimer !== null) {
+      window.clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    (_a = this.observer) == null ? void 0 : _a.disconnect();
   }
   async loadSettings() {
     const data = await this.loadData();

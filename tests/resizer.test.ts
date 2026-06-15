@@ -33,4 +33,42 @@ describe("makeTableResizable", () => {
 
     expect(tableEl.querySelectorAll(".sheet-extend-resizer").length).toBe(2);
   });
+
+  it("places resize handles on the right edge of merged cells", () => {
+    const plugin = {
+      settings: { minWidth: 50, maxWidth: 500, defaultWidth: 150 },
+    } as any;
+
+    const tableEl = document.createElement("table");
+    document.body.appendChild(tableEl);
+
+    const colgroup = document.createElement("colgroup");
+    tableEl.appendChild(colgroup);
+    for (let i = 0; i < 3; i++) {
+      colgroup.appendChild(document.createElement("col"));
+    }
+
+    const tr = document.createElement("tr");
+    tableEl.appendChild(tr);
+    const merged = document.createElement("td");
+    merged.setAttribute("data-col", "0");
+    merged.colSpan = 2;
+    tr.appendChild(merged);
+    const last = document.createElement("td");
+    last.setAttribute("data-col", "2");
+    tr.appendChild(last);
+
+    const save = vi.fn();
+    makeTableResizable(plugin, tableEl, save);
+
+    const handle = merged.querySelector(".sheet-extend-resizer") as HTMLElement;
+    expect(handle).not.toBeNull();
+
+    Object.defineProperty(colgroup.children[1], "offsetWidth", { value: 90, configurable: true });
+    handle.dispatchEvent(new MouseEvent("mousedown", { clientX: 100, bubbles: true }));
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 130 }));
+    document.dispatchEvent(new MouseEvent("mouseup"));
+
+    expect((colgroup.children[1] as HTMLElement).style.width).toBe("120px");
+  });
 });

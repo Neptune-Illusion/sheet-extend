@@ -19,7 +19,8 @@ export function makeTableResizable(
 
   const cells = Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[];
   for (const cell of cells) {
-    const index = Number(cell.getAttribute("data-col") ?? cell.cellIndex);
+    const startIndex = Number(cell.getAttribute("data-col") ?? cell.cellIndex);
+    const index = startIndex + (cell.colSpan || 1) - 1;
     if (Number.isNaN(index) || index >= cols.length - 1) continue;
 
     cell.style.position = "relative";

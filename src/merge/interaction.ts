@@ -137,14 +137,14 @@ class MergeInteraction {
     const menu = new Menu();
     menu.addItem((item) => {
       item
-        .setTitle("Merge selected cells horizontally")
+        .setTitle("Merge selected cells horizontally (Mod+Shift+Right)")
         .setIcon("columns-3")
         .setDisabled(!selectionHasHorizontalSpan(selection))
         .onClick(() => this.merge("horizontal"));
     });
     menu.addItem((item) => {
       item
-        .setTitle("Merge selected cells vertically")
+        .setTitle("Merge selected cells vertically (Mod+Shift+Down)")
         .setIcon("rows-3")
         .setDisabled(!selectionHasVerticalSpan(selection))
         .onClick(() => this.merge("vertical"));
@@ -152,7 +152,7 @@ class MergeInteraction {
     menu.addSeparator();
     menu.addItem((item) => {
       item
-        .setTitle("Unmerge selected cells")
+        .setTitle("Unmerge selected cells (Mod+Shift+Left)")
         .setIcon("split-square-horizontal")
         .onClick(() => this.unmerge());
     });

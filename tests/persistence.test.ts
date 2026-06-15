@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { getTableId } from "../src/resizer/persistence";
+import { describe, it, expect, vi } from "vitest";
+import { getTableId, saveWidths } from "../src/resizer/persistence";
 
 describe("getTableId", () => {
   it("prefers source path and section line when available", () => {
@@ -16,5 +16,22 @@ describe("getTableId", () => {
     const id = getTableId(table);
     expect(typeof id).toBe("string");
     expect(id.length).toBeGreaterThan(0);
+  });
+
+  it("saves widths with the current data schema version", () => {
+    const saveData = vi.fn();
+    const plugin = {
+      settings: {},
+      widthStore: {},
+      saveData,
+    } as any;
+
+    saveWidths(plugin, "table-demo", [120, null]);
+
+    expect(saveData).toHaveBeenCalledWith({
+      version: "1.3.0",
+      settings: {},
+      columnWidths: { "table-demo": [120, null] },
+    });
   });
 });

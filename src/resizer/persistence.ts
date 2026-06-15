@@ -29,7 +29,7 @@ export function saveWidths(
   }
   (plugin as any).widthStore = store;
   plugin.saveData({
-    version: "1.1.0",
+    version: "1.3.0",
     settings: (plugin as any).settings,
     columnWidths: store,
   });

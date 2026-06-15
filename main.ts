@@ -3,10 +3,28 @@ import { SheetExtendSettings, DEFAULT_SETTINGS, SheetExtendSettingTab } from "./
 import { parseAndMerge } from "./src/sheet/parser";
 import { renderTable } from "./src/sheet/renderer";
 import { hasMergeMarkers } from "./src/sheet/detect";
+import { applyFormulas } from "./src/sheet/formulas";
+import {
+  domTableSignature,
+  extractMarkdownTableSpecs,
+  markdownTableSignature,
+  updateSeparatorLineForWidths,
+} from "./src/sheet/markdown-table";
 import { makeTableResizable } from "./src/resizer/resizer";
 import { getTableId, saveWidths, loadWidths, applySavedWidths } from "./src/resizer/persistence";
 import { installMergeInteraction, runMergeCommand, runUnmergeCommand } from "./src/merge/interaction";
 import type { CellSelection, TableRange } from "./src/sheet/writeback";
+
+interface TableMatch {
+  text: string;
+  range: TableRange;
+  sourcePath: string;
+}
+
+interface TableEnhancementContext {
+  sourcePath: string;
+  getSectionInfo?: (el: HTMLElement) => { text: string; lineStart: number; lineEnd: number } | null;
+}
 
 /**
  * Ensure a table has a <colgroup> with one <col> per column.
@@ -19,11 +37,7 @@ import type { CellSelection, TableRange } from "./src/sheet/writeback";
 function ensureColgroup(tableEl: HTMLTableElement): void {
   if (tableEl.querySelector("colgroup")) return;
 
-  // Determine column count from the first row's cells (header row preferred).
-  const firstRow =
-    tableEl.querySelector("thead tr") || tableEl.querySelector("tr");
-  if (!firstRow) return;
-  const colCount = firstRow.querySelectorAll("th, td").length;
+  const colCount = getLogicalColumnCount(tableEl);
   if (colCount === 0) return;
 
   const colgroup = document.createElement("colgroup");
@@ -34,20 +48,34 @@ function ensureColgroup(tableEl: HTMLTableElement): void {
   tableEl.insertBefore(colgroup, tableEl.firstChild);
 }
 
+function getLogicalColumnCount(tableEl: HTMLTableElement): number {
+  let colCount = 0;
+  for (const row of Array.from(tableEl.rows)) {
+    let width = 0;
+    for (const cell of Array.from(row.cells)) {
+      width += cell.colSpan || 1;
+    }
+    colCount = Math.max(colCount, width);
+  }
+  return colCount;
+}
 
 class SheetExtendRenderChild extends MarkdownRenderChild {
   constructor(
     containerEl: HTMLElement,
     private app: import("obsidian").App,
     private sourcePath: string,
-    private content: string
+    private content: string,
+    private enableFormulas: boolean
   ) {
     super(containerEl);
   }
 
   onload() {
     const tableEl = this.containerEl.createEl("table");
-    const parsed = parseAndMerge(this.content);
+    const parsed = this.enableFormulas
+      ? applyFormulas(parseAndMerge(this.content))
+      : parseAndMerge(this.content);
     renderTable(this.app, tableEl, parsed, this.sourcePath, this);
   }
 }
@@ -57,6 +85,8 @@ export default class SheetExtendPlugin extends Plugin {
   widthStore: { [tableId: string]: (number | null)[] } = {};
   private tableRanges = new WeakMap<HTMLTableElement, TableRange>();
   private activeMergeSelection: { tableEl: HTMLTableElement; selection: CellSelection } | null = null;
+  private refreshTimer: number | null = null;
+  private observer: MutationObserver | null = null;
 
   async onload() {
     await this.loadSettings();
@@ -73,7 +103,9 @@ export default class SheetExtendPlugin extends Plugin {
     });
 
     this.registerMarkdownCodeBlockProcessor("sheet", (source, el, ctx) => {
-      const parsed = parseAndMerge(source);
+      const parsed = this.settings.enableFormulas
+        ? applyFormulas(parseAndMerge(source))
+        : parseAndMerge(source);
       const tableEl = el.createEl("table");
       renderTable(this.app, tableEl, parsed, ctx.sourcePath, this);
       this.setupResizer(tableEl);
@@ -105,7 +137,16 @@ export default class SheetExtendPlugin extends Plugin {
       id: "unmerge-table-cells",
       name: "Unmerge selected table cells",
       checkCallback: (checking) => this.runActiveUnmergeCommand(checking),
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowLeft" }],
     });
+
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleLivePreviewRefresh()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.scheduleLivePreviewRefresh()));
+    this.registerEvent(this.app.workspace.on("file-open", () => this.scheduleLivePreviewRefresh()));
+    this.registerEvent(this.app.workspace.on("editor-change", () => this.scheduleLivePreviewRefresh()));
+    this.registerDomEvent(window, "resize", () => this.scheduleLivePreviewRefresh());
+    this.observeWorkspaceTables();
+    this.scheduleLivePreviewRefresh();
   }
 
   /**
@@ -173,78 +214,102 @@ export default class SheetExtendPlugin extends Plugin {
     return null;
   }
 
-  private processTable(tableEl: HTMLTableElement, context: any) {
+  private processTable(tableEl: HTMLTableElement, context: TableEnhancementContext) {
+    if (!tableEl.isConnected) return;
+
+    const match = this.resolveTableSource(tableEl, context);
     const tableId = getTableId(tableEl);
 
-    let sourceText = "";
+    if (!match || !hasMergeMarkers(match.text)) {
+      this.enhancePlainTable(tableEl);
+      return;
+    }
 
-    // Strategy 1: getSectionInfo() — works in Reading mode
+    const parsed = this.settings.enableFormulas
+      ? applyFormulas(parseAndMerge(match.text))
+      : parseAndMerge(match.text);
+    renderTable(this.app, tableEl, parsed, match.sourcePath, this);
+    tableEl.setAttribute("data-source-path", match.sourcePath);
+    tableEl.setAttribute("data-line-start", String(match.range.startLine));
+    this.tableRanges.set(tableEl, match.range);
+
+    this.applyInitialWidths(tableEl, tableId, match.text);
+
+    this.setupResizer(tableEl);
+    this.setupMergeInteraction(tableEl);
+  }
+
+  private resolveTableSource(tableEl: HTMLTableElement, context: TableEnhancementContext): TableMatch | null {
+    let sourceText = "";
+    let range: TableRange | null = null;
+
     if (context.getSectionInfo) {
       const sectionInfo = context.getSectionInfo(tableEl);
       if (sectionInfo) {
         const lines = sectionInfo.text.split("\n");
         sourceText = lines.slice(sectionInfo.lineStart, sectionInfo.lineEnd + 1).join("\n");
-        this.tableRanges.set(tableEl, {
+        range = {
           startLine: sectionInfo.lineStart,
           endLine: sectionInfo.lineEnd,
-        });
+        };
       }
     }
 
-    // Strategy 2: Read raw markdown from the editor document.
-    // Fallback when getSectionInfo returns null (e.g. in Live Preview or
-    // certain embedded contexts). The editor's raw text preserves merge markers.
     if (!sourceText) {
       const view = this.app.workspace.getActiveViewOfType(MarkdownView);
       if (view && view.editor) {
         const fullDoc = view.editor.getValue();
         const match = this.findTableInSource(fullDoc, tableEl);
         sourceText = match?.text || "";
-        if (match) this.tableRanges.set(tableEl, match.range);
+        range = match?.range || null;
       }
     }
 
-    // Strategy 3: DOM innerHTML fallback — last resort
-    if (!sourceText) {
-      const rows: string[] = [];
-      for (const tr of Array.from(tableEl.querySelectorAll("tr"))) {
-        const cells: string[] = [];
-        for (const td of Array.from(tr.querySelectorAll("th, td"))) {
-          cells.push((td as HTMLElement).innerHTML || "");
-        }
-        rows.push("| " + cells.join(" | ") + " |");
-      }
-      sourceText = rows.join("\n");
-      if (rows.length > 1) {
-        const colCount = tableEl.querySelector("tr")?.children.length || 1;
-        const delim = "| " + Array(colCount).fill("---").join(" | ") + " |";
-        sourceText = rows[0] + "\n" + delim + "\n" + rows.slice(1).join("\n");
-      }
+    if (!sourceText || !range) return null;
+
+    return { text: sourceText, range, sourcePath: context.sourcePath || "" };
+  }
+
+  private enhancePlainTable(tableEl: HTMLTableElement): void {
+    ensureColgroup(tableEl);
+
+    const range = this.getRangeForPlainTable(tableEl);
+    if (range) {
+      this.tableRanges.set(tableEl, range);
     }
 
-    if (!hasMergeMarkers(sourceText)) {
-      // Plain tables (no ^/< merge markers) are rendered natively by Obsidian
-      // and have no <colgroup>. The resizer and applySavedWidths both operate
-      // on colgroup > col, so without it they no-op. Inject one so plain tables
-      // become resizable too, reusing the existing resizer/persistence path.
-      ensureColgroup(tableEl);
-      const savedWidths = loadWidths(this, tableId);
-      if (savedWidths) {
-        applySavedWidths(tableEl, savedWidths);
-      }
-      this.setupResizer(tableEl);
-      return;
-    }
-
-    const parsed = parseAndMerge(sourceText);
-    renderTable(this.app, tableEl, parsed, context.sourcePath || "", this);
-
-    const savedWidths = loadWidths(this, tableId);
-    if (savedWidths) {
-      applySavedWidths(tableEl, savedWidths);
-    }
+    const tableId = getTableId(tableEl);
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const match = this.resolveTableSource(tableEl, { sourcePath: view?.file?.path || "" });
+    this.applyInitialWidths(tableEl, tableId, match?.text || "");
 
     this.setupResizer(tableEl);
+    this.addCellCoordinates(tableEl);
+    this.setupMergeInteraction(tableEl);
+  }
+
+  private addCellCoordinates(tableEl: HTMLTableElement): void {
+    const occupied = new Map<string, true>();
+    for (let rowIndex = 0; rowIndex < tableEl.rows.length; rowIndex++) {
+      const row = tableEl.rows[rowIndex];
+      let logicalCol = 0;
+      for (const cell of Array.from(row.cells)) {
+        while (occupied.has(`${rowIndex}:${logicalCol}`)) {
+          logicalCol++;
+        }
+        cell.setAttribute("data-row", String(rowIndex));
+        cell.setAttribute("data-col", String(logicalCol));
+        for (let r = 0; r < (cell.rowSpan || 1); r++) {
+          for (let c = 0; c < (cell.colSpan || 1); c++) {
+            occupied.set(`${rowIndex + r}:${logicalCol + c}`, true);
+          }
+        }
+        logicalCol += cell.colSpan || 1;
+      }
+    }
+  }
+
+  private setupMergeInteraction(tableEl: HTMLTableElement): void {
     installMergeInteraction({
       app: this.app,
       component: this,
@@ -253,6 +318,14 @@ export default class SheetExtendPlugin extends Plugin {
         this.activeMergeSelection = context;
       },
     }, tableEl);
+  }
+
+  private getRangeForPlainTable(tableEl: HTMLTableElement): TableRange | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view?.editor) return null;
+
+    const match = this.findTableInSource(view.editor.getValue(), tableEl);
+    return match?.range || null;
   }
 
   private runActiveMergeCommand(checking: boolean, direction: "horizontal" | "vertical"): boolean {
@@ -286,6 +359,7 @@ export default class SheetExtendPlugin extends Plugin {
    */
   private findTableInSource(fullDoc: string, tableEl: HTMLTableElement): { text: string; range: TableRange } | null {
     const lines = fullDoc.split("\n");
+    const tableSpecs = extractMarkdownTableSpecs(fullDoc);
 
     const headerRow = tableEl.querySelector("tr");
     if (!headerRow) return null;
@@ -294,7 +368,15 @@ export default class SheetExtendPlugin extends Plugin {
       const text = (th as HTMLElement).textContent?.trim() || "";
       if (text) headerCells.push(text);
     }
-    if (headerCells.length === 0) return null;
+    const domSignature = domTableSignature(tableEl);
+    const signatureMatch = tableSpecs.find((spec) => markdownTableSignature(spec) === domSignature);
+    if (signatureMatch) {
+      return { text: signatureMatch.text, range: signatureMatch.range };
+    }
+    if (headerCells.length === 0) {
+      const first = tableSpecs[0];
+      return first ? { text: first.text, range: first.range } : null;
+    }
 
     let tableStartIdx = -1;
     for (let i = 0; i < lines.length; i++) {
@@ -328,12 +410,100 @@ export default class SheetExtendPlugin extends Plugin {
   private setupResizer(tableEl: HTMLTableElement) {
     const tableId = getTableId(tableEl);
     makeTableResizable(this, tableEl, (widths) => {
-      saveWidths(this, tableId, widths);
+      if (!this.writeWidthsToMarkdown(tableEl, widths)) {
+        saveWidths(this, tableId, widths);
+      }
     });
+  }
+
+  private applyInitialWidths(tableEl: HTMLTableElement, tableId: string, tableText: string): void {
+    if (this.settings.widthPersistence === "markdown" && tableText) {
+      const specs = extractMarkdownTableSpecs(tableText);
+      const spec = specs[0];
+      if (spec?.columns.length) {
+        applySavedWidths(
+          tableEl,
+          spec.columns.map((column) => column.dashCount * this.settings.pixelsPerDash)
+        );
+        return;
+      }
+    }
+
+    const savedWidths = loadWidths(this, tableId);
+    if (savedWidths) {
+      applySavedWidths(tableEl, savedWidths);
+    }
+  }
+
+  private writeWidthsToMarkdown(tableEl: HTMLTableElement, widths: (number | null)[]): boolean {
+    if (this.settings.widthPersistence !== "markdown") return false;
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const editor = view?.editor;
+    const range = this.tableRanges.get(tableEl);
+    if (!editor || !range) return false;
+
+    const nextText = updateSeparatorLineForWidths(
+      editor.getValue(),
+      range,
+      widths,
+      this.settings.pixelsPerDash
+    );
+    if (!nextText) return false;
+
+    editor.setValue(nextText);
+    editor.setCursor({ line: range.startLine + 1, ch: 0 });
+    return true;
+  }
+
+  private scheduleLivePreviewRefresh(): void {
+    if (this.refreshTimer !== null) {
+      window.clearTimeout(this.refreshTimer);
+    }
+
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshTimer = null;
+      this.refreshLivePreviewTables();
+    }, 80);
+  }
+
+  private refreshLivePreviewTables(): void {
+    if (!this.settings.nativeProcessing) return;
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view?.contentEl) return;
+
+    const sourcePath = view.file?.path || "";
+    const tables = Array.from(
+      view.contentEl.querySelectorAll("table:not([id='obsidian-sheets-parsed'])")
+    ).filter((table): table is HTMLTableElement => table instanceof HTMLTableElement);
+
+    for (const tableEl of tables) {
+      this.processTable(tableEl, { sourcePath });
+    }
+  }
+
+  private observeWorkspaceTables(): void {
+    this.observer = new MutationObserver((mutations) => {
+      if (mutations.some((mutation) =>
+        Array.from(mutation.addedNodes).some((node) =>
+          node instanceof HTMLElement && (node.matches("table") || !!node.querySelector("table"))
+        )
+      )) {
+        this.scheduleLivePreviewRefresh();
+      }
+    });
+    this.observer.observe(document.body, { childList: true, subtree: true });
+    this.register(() => this.observer?.disconnect());
   }
 
   onunload() {
     document.body.classList.remove("sheet-extend-resizing");
+    if (this.refreshTimer !== null) {
+      window.clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    this.observer?.disconnect();
   }
 
   async loadSettings() {

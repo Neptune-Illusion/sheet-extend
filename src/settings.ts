@@ -5,6 +5,9 @@ export interface SheetExtendSettings {
   maxWidth: number;
   defaultWidth: number;
   nativeProcessing: boolean;
+  widthPersistence: "plugin" | "markdown";
+  pixelsPerDash: number;
+  enableFormulas: boolean;
 }
 
 export const DEFAULT_SETTINGS: SheetExtendSettings = {
@@ -12,6 +15,9 @@ export const DEFAULT_SETTINGS: SheetExtendSettings = {
   maxWidth: 500,
   defaultWidth: 150,
   nativeProcessing: true,
+  widthPersistence: "plugin",
+  pixelsPerDash: 8,
+  enableFormulas: true,
 };
 
 export class SheetExtendSettingTab extends PluginSettingTab {
@@ -80,6 +86,40 @@ export class SheetExtendSettingTab extends PluginSettingTab {
           .setValue(this.settings.nativeProcessing)
           .onChange(async (value) => {
             await this.updateSettings({ nativeProcessing: value });
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Store column widths in Markdown")
+      .setDesc("Write resized column widths into the table separator row using dash counts")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.settings.widthPersistence === "markdown")
+          .onChange(async (value) => {
+            await this.updateSettings({ widthPersistence: value ? "markdown" : "plugin" });
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Pixels per separator dash")
+      .setDesc("Used when storing column widths in Markdown")
+      .addSlider((slider) =>
+        slider
+          .setLimits(4, 20, 1)
+          .setValue(this.settings.pixelsPerDash)
+          .onChange(async (value) => {
+            await this.updateSettings({ pixelsPerDash: value });
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Enable table formulas")
+      .setDesc("Render =sum, =avg, =count, =max, and =min in enhanced tables")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.settings.enableFormulas)
+          .onChange(async (value) => {
+            await this.updateSettings({ enableFormulas: value });
           })
       );
   }
