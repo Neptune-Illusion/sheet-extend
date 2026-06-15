@@ -1,6 +1,6 @@
 {
   "name": "sheet-extend",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Obsidian plugin: resizable columns + sheet features",
   "main": "main.js",
   "scripts": {

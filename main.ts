@@ -72,6 +72,36 @@ function selectionHasVerticalSpan(selection: CellSelection): boolean {
   return Math.abs(selection.anchor.row - selection.focus.row) > 0;
 }
 
+function getTableBounds(tableEl: HTMLTableElement): { maxRow: number; maxCol: number } {
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLElement[]) {
+    const row = Number(cell.getAttribute("data-row"));
+    const col = Number(cell.getAttribute("data-col"));
+    if (Number.isInteger(row)) maxRow = Math.max(maxRow, row);
+    if (Number.isInteger(col)) maxCol = Math.max(maxCol, col + ((cell as HTMLTableCellElement).colSpan || 1) - 1);
+  }
+  return { maxRow, maxCol };
+}
+
+function expandSelectionForDirection(
+  tableEl: HTMLTableElement,
+  selection: CellSelection,
+  direction: "horizontal" | "vertical"
+): CellSelection | null {
+  if (direction === "horizontal" && selectionHasHorizontalSpan(selection)) return selection;
+  if (direction === "vertical" && selectionHasVerticalSpan(selection)) return selection;
+
+  const { maxRow, maxCol } = getTableBounds(tableEl);
+  if (direction === "horizontal" && selection.focus.col < maxCol) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
+  }
+  if (direction === "vertical" && selection.focus.row < maxRow) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
+  }
+  return null;
+}
+
 class SheetExtendRenderChild extends MarkdownRenderChild {
   constructor(
     containerEl: HTMLElement,
@@ -268,7 +298,43 @@ export default class SheetExtendPlugin extends Plugin {
     this.applyInitialWidths(tableEl, tableId, match.text);
     this.setupResizer(tableEl);
     this.addCellCoordinates(tableEl);
+    this.applyMergePreviewToExistingTable(tableEl, match.text);
     this.setupMergeInteraction(tableEl);
+  }
+
+  private applyMergePreviewToExistingTable(tableEl: HTMLTableElement, tableText: string): void {
+    const parsed = parseAndMerge(tableText);
+    const cellByPosition = new Map<string, HTMLTableCellElement>();
+
+    for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
+      cell.style.display = "";
+      cell.colSpan = 1;
+      cell.rowSpan = 1;
+    }
+
+    this.addCellCoordinates(tableEl);
+    for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
+      const row = Number(cell.getAttribute("data-row"));
+      const col = Number(cell.getAttribute("data-col"));
+      if (!Number.isInteger(row) || !Number.isInteger(col)) continue;
+
+      cellByPosition.set(`${row}:${col}`, cell);
+    }
+
+    for (let row = 0; row < parsed.grid.length; row++) {
+      for (let col = 0; col < parsed.grid[row].length; col++) {
+        const parsedCell = parsed.grid[row][col];
+        const domCell = cellByPosition.get(`${row}:${col}`);
+        if (!domCell) continue;
+
+        if (parsedCell.hidden) {
+          domCell.style.display = "none";
+        } else {
+          domCell.colSpan = parsedCell.colspan || 1;
+          domCell.rowSpan = parsedCell.rowspan || 1;
+        }
+      }
+    }
   }
 
   private resolveTableSource(tableEl: HTMLTableElement, context: TableEnhancementContext): TableMatch | null {
@@ -366,10 +432,10 @@ export default class SheetExtendPlugin extends Plugin {
 
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range) return false;
-    if (direction === "horizontal" && !selectionHasHorizontalSpan(active.selection)) return false;
-    if (direction === "vertical" && !selectionHasVerticalSpan(active.selection)) return false;
+    const selection = expandSelectionForDirection(active.tableEl, active.selection, direction);
+    if (!selection) return false;
     if (!checking) {
-      runMergeCommand(this.app, direction, range, active.selection);
+      runMergeCommand(this.app, direction, range, selection);
     }
     return true;
   }
@@ -381,21 +447,23 @@ export default class SheetExtendPlugin extends Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range) return;
 
+    const horizontalSelection = expandSelectionForDirection(active.tableEl, active.selection, "horizontal");
+    const verticalSelection = expandSelectionForDirection(active.tableEl, active.selection, "vertical");
     const selection = active.selection;
     menu.addSeparator?.();
     menu.addItem((item: any) => {
       item
         .setTitle("Merge selected cells horizontally")
         .setIcon("columns-3")
-        .setDisabled(!selectionHasHorizontalSpan(selection))
-        .onClick(() => runMergeCommand(this.app, "horizontal", range, selection));
+        .setDisabled(!horizontalSelection)
+        .onClick(() => runMergeCommand(this.app, "horizontal", range, horizontalSelection));
     });
     menu.addItem((item: any) => {
       item
         .setTitle("Merge selected cells vertically")
         .setIcon("rows-3")
-        .setDisabled(!selectionHasVerticalSpan(selection))
-        .onClick(() => runMergeCommand(this.app, "vertical", range, selection));
+        .setDisabled(!verticalSelection)
+        .onClick(() => runMergeCommand(this.app, "vertical", range, verticalSelection));
     });
     menu.addItem((item: any) => {
       item

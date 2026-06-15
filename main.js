@@ -742,6 +742,32 @@ function selectionHasVerticalSpan(selection) {
   const bounds = normalizeSelection2(selection);
   return bounds.rowEnd > bounds.rowStart;
 }
+function getTableBounds(tableEl) {
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    const position = getCellPosition(cell);
+    if (!position)
+      continue;
+    maxRow = Math.max(maxRow, position.row);
+    maxCol = Math.max(maxCol, position.col + (cell.colSpan || 1) - 1);
+  }
+  return { maxRow, maxCol };
+}
+function expandSelectionForDirection(tableEl, selection, direction) {
+  if (direction === "horizontal" && selectionHasHorizontalSpan(selection))
+    return selection;
+  if (direction === "vertical" && selectionHasVerticalSpan(selection))
+    return selection;
+  const bounds = getTableBounds(tableEl);
+  if (direction === "horizontal" && selection.focus.col < bounds.maxCol) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
+  }
+  if (direction === "vertical" && selection.focus.row < bounds.maxRow) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
+  }
+  return null;
+}
 function getEditor(app) {
   const view = app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
   return (view == null ? void 0 : view.editor) || null;
@@ -796,7 +822,10 @@ var MergeInteraction = class {
   merge(direction) {
     if (!this.selection)
       return false;
-    this.writeSelection((doc, range, selection) => applyMergeToDocument(doc, range, selection, direction).text);
+    const selection = expandSelectionForDirection(this.tableEl, this.selection, direction);
+    if (!selection)
+      return false;
+    this.writeSelection((doc, range) => applyMergeToDocument(doc, range, selection, direction).text);
     return true;
   }
   unmerge() {
@@ -810,11 +839,13 @@ var MergeInteraction = class {
     if (!selection)
       return;
     const menu = new import_obsidian3.Menu();
+    const horizontalSelection = expandSelectionForDirection(this.tableEl, selection, "horizontal");
+    const verticalSelection = expandSelectionForDirection(this.tableEl, selection, "vertical");
     menu.addItem((item) => {
-      item.setTitle("Merge selected cells horizontally (Mod+Shift+Right)").setIcon("columns-3").setDisabled(!selectionHasHorizontalSpan(selection)).onClick(() => this.merge("horizontal"));
+      item.setTitle("Merge selected cells horizontally (Mod+Shift+Right)").setIcon("columns-3").setDisabled(!horizontalSelection).onClick(() => this.merge("horizontal"));
     });
     menu.addItem((item) => {
-      item.setTitle("Merge selected cells vertically (Mod+Shift+Down)").setIcon("rows-3").setDisabled(!selectionHasVerticalSpan(selection)).onClick(() => this.merge("vertical"));
+      item.setTitle("Merge selected cells vertically (Mod+Shift+Down)").setIcon("rows-3").setDisabled(!verticalSelection).onClick(() => this.merge("vertical"));
     });
     menu.addSeparator();
     menu.addItem((item) => {
@@ -897,6 +928,33 @@ function selectionHasHorizontalSpan2(selection) {
 }
 function selectionHasVerticalSpan2(selection) {
   return Math.abs(selection.anchor.row - selection.focus.row) > 0;
+}
+function getTableBounds2(tableEl) {
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    const row = Number(cell.getAttribute("data-row"));
+    const col = Number(cell.getAttribute("data-col"));
+    if (Number.isInteger(row))
+      maxRow = Math.max(maxRow, row);
+    if (Number.isInteger(col))
+      maxCol = Math.max(maxCol, col + (cell.colSpan || 1) - 1);
+  }
+  return { maxRow, maxCol };
+}
+function expandSelectionForDirection2(tableEl, selection, direction) {
+  if (direction === "horizontal" && selectionHasHorizontalSpan2(selection))
+    return selection;
+  if (direction === "vertical" && selectionHasVerticalSpan2(selection))
+    return selection;
+  const { maxRow, maxCol } = getTableBounds2(tableEl);
+  if (direction === "horizontal" && selection.focus.col < maxCol) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
+  }
+  if (direction === "vertical" && selection.focus.row < maxRow) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
+  }
+  return null;
 }
 var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   constructor() {
@@ -1048,7 +1106,39 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     this.applyInitialWidths(tableEl, tableId, match.text);
     this.setupResizer(tableEl);
     this.addCellCoordinates(tableEl);
+    this.applyMergePreviewToExistingTable(tableEl, match.text);
     this.setupMergeInteraction(tableEl);
+  }
+  applyMergePreviewToExistingTable(tableEl, tableText) {
+    const parsed = parseAndMerge(tableText);
+    const cellByPosition = /* @__PURE__ */ new Map();
+    for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+      cell.style.display = "";
+      cell.colSpan = 1;
+      cell.rowSpan = 1;
+    }
+    this.addCellCoordinates(tableEl);
+    for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+      const row = Number(cell.getAttribute("data-row"));
+      const col = Number(cell.getAttribute("data-col"));
+      if (!Number.isInteger(row) || !Number.isInteger(col))
+        continue;
+      cellByPosition.set(`${row}:${col}`, cell);
+    }
+    for (let row = 0; row < parsed.grid.length; row++) {
+      for (let col = 0; col < parsed.grid[row].length; col++) {
+        const parsedCell = parsed.grid[row][col];
+        const domCell = cellByPosition.get(`${row}:${col}`);
+        if (!domCell)
+          continue;
+        if (parsedCell.hidden) {
+          domCell.style.display = "none";
+        } else {
+          domCell.colSpan = parsedCell.colspan || 1;
+          domCell.rowSpan = parsedCell.rowspan || 1;
+        }
+      }
+    }
   }
   resolveTableSource(tableEl, context) {
     let sourceText = "";
@@ -1136,12 +1226,11 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range)
       return false;
-    if (direction === "horizontal" && !selectionHasHorizontalSpan2(active.selection))
-      return false;
-    if (direction === "vertical" && !selectionHasVerticalSpan2(active.selection))
+    const selection = expandSelectionForDirection2(active.tableEl, active.selection, direction);
+    if (!selection)
       return false;
     if (!checking) {
-      runMergeCommand(this.app, direction, range, active.selection);
+      runMergeCommand(this.app, direction, range, selection);
     }
     return true;
   }
@@ -1153,13 +1242,15 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range)
       return;
+    const horizontalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "horizontal");
+    const verticalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "vertical");
     const selection = active.selection;
     (_a = menu.addSeparator) == null ? void 0 : _a.call(menu);
     menu.addItem((item) => {
-      item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!selectionHasHorizontalSpan2(selection)).onClick(() => runMergeCommand(this.app, "horizontal", range, selection));
+      item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!horizontalSelection).onClick(() => runMergeCommand(this.app, "horizontal", range, horizontalSelection));
     });
     menu.addItem((item) => {
-      item.setTitle("Merge selected cells vertically").setIcon("rows-3").setDisabled(!selectionHasVerticalSpan2(selection)).onClick(() => runMergeCommand(this.app, "vertical", range, selection));
+      item.setTitle("Merge selected cells vertically").setIcon("rows-3").setDisabled(!verticalSelection).onClick(() => runMergeCommand(this.app, "vertical", range, verticalSelection));
     });
     menu.addItem((item) => {
       item.setTitle("Unmerge selected cells").setIcon("split-square-horizontal").onClick(() => runUnmergeCommand(this.app, range, selection));

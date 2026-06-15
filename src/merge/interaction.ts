@@ -67,6 +67,36 @@ function selectionHasVerticalSpan(selection: CellSelection): boolean {
   return bounds.rowEnd > bounds.rowStart;
 }
 
+function getTableBounds(tableEl: HTMLTableElement): { maxRow: number; maxCol: number } {
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
+    const position = getCellPosition(cell);
+    if (!position) continue;
+    maxRow = Math.max(maxRow, position.row);
+    maxCol = Math.max(maxCol, position.col + (cell.colSpan || 1) - 1);
+  }
+  return { maxRow, maxCol };
+}
+
+function expandSelectionForDirection(
+  tableEl: HTMLTableElement,
+  selection: CellSelection,
+  direction: MergeDirection
+): CellSelection | null {
+  if (direction === "horizontal" && selectionHasHorizontalSpan(selection)) return selection;
+  if (direction === "vertical" && selectionHasVerticalSpan(selection)) return selection;
+
+  const bounds = getTableBounds(tableEl);
+  if (direction === "horizontal" && selection.focus.col < bounds.maxCol) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
+  }
+  if (direction === "vertical" && selection.focus.row < bounds.maxRow) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
+  }
+  return null;
+}
+
 function getEditor(app: App): Editor | null {
   const view = app.workspace.getActiveViewOfType(MarkdownView);
   return view?.editor || null;
@@ -87,7 +117,9 @@ class MergeInteraction {
 
   merge(direction: MergeDirection): boolean {
     if (!this.selection) return false;
-    this.writeSelection((doc, range, selection) => applyMergeToDocument(doc, range, selection, direction).text);
+    const selection = expandSelectionForDirection(this.tableEl, this.selection, direction);
+    if (!selection) return false;
+    this.writeSelection((doc, range) => applyMergeToDocument(doc, range, selection, direction).text);
     return true;
   }
 
@@ -141,18 +173,20 @@ class MergeInteraction {
     if (!selection) return;
 
     const menu = new Menu();
+    const horizontalSelection = expandSelectionForDirection(this.tableEl, selection, "horizontal");
+    const verticalSelection = expandSelectionForDirection(this.tableEl, selection, "vertical");
     menu.addItem((item) => {
       item
         .setTitle("Merge selected cells horizontally (Mod+Shift+Right)")
         .setIcon("columns-3")
-        .setDisabled(!selectionHasHorizontalSpan(selection))
+        .setDisabled(!horizontalSelection)
         .onClick(() => this.merge("horizontal"));
     });
     menu.addItem((item) => {
       item
         .setTitle("Merge selected cells vertically (Mod+Shift+Down)")
         .setIcon("rows-3")
-        .setDisabled(!selectionHasVerticalSpan(selection))
+        .setDisabled(!verticalSelection)
         .onClick(() => this.merge("vertical"));
     });
     menu.addSeparator();
