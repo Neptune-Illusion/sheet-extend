@@ -712,6 +712,9 @@ function clearMergeInDocument(documentText, range, selection) {
 }
 
 // src/merge/interaction.ts
+function isSourceModeTable(tableEl) {
+  return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
+}
 function getCellPosition(cell) {
   const row = Number(cell.getAttribute("data-row"));
   const col = Number(cell.getAttribute("data-col"));
@@ -778,8 +781,10 @@ var MergeInteraction = class {
         this.paintSelection();
       }
       this.host.setActiveSelection({ tableEl: this.tableEl, selection: this.selection });
-      evt.preventDefault();
-      this.showMenu(evt);
+      if (!isSourceModeTable(this.tableEl)) {
+        evt.preventDefault();
+        this.showMenu(evt);
+      }
     };
     this.tableEl.classList.add("sheet-extend-merge-enabled");
     this.host.component.registerDomEvent(this.tableEl, "click", this.handleClick);
@@ -884,6 +889,15 @@ function getLogicalColumnCount(tableEl) {
   }
   return colCount;
 }
+function isSourceModeTable2(tableEl) {
+  return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
+}
+function selectionHasHorizontalSpan2(selection) {
+  return Math.abs(selection.anchor.col - selection.focus.col) > 0;
+}
+function selectionHasVerticalSpan2(selection) {
+  return Math.abs(selection.anchor.row - selection.focus.row) > 0;
+}
 var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -938,6 +952,9 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       checkCallback: (checking) => this.runActiveUnmergeCommand(checking),
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowLeft" }]
     });
+    this.registerEvent(this.app.workspace.on("editor-menu", (menu) => {
+      this.addMergeItemsToEditorMenu(menu);
+    }));
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleLivePreviewRefresh()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.scheduleLivePreviewRefresh()));
     this.registerEvent(this.app.workspace.on("file-open", () => this.scheduleLivePreviewRefresh()));
@@ -1010,6 +1027,10 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       this.enhancePlainTable(tableEl);
       return;
     }
+    if (isSourceModeTable2(tableEl)) {
+      this.enhanceSourceModeTable(tableEl, tableId, match);
+      return;
+    }
     const parsed = this.settings.enableFormulas ? applyFormulas(parseAndMerge(match.text)) : parseAndMerge(match.text);
     renderTable(this.app, tableEl, parsed, match.sourcePath, this);
     tableEl.setAttribute("data-source-path", match.sourcePath);
@@ -1017,6 +1038,16 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     this.tableRanges.set(tableEl, match.range);
     this.applyInitialWidths(tableEl, tableId, match.text);
     this.setupResizer(tableEl);
+    this.setupMergeInteraction(tableEl);
+  }
+  enhanceSourceModeTable(tableEl, tableId, match) {
+    tableEl.setAttribute("data-source-path", match.sourcePath);
+    tableEl.setAttribute("data-line-start", String(match.range.startLine));
+    this.tableRanges.set(tableEl, match.range);
+    ensureColgroup(tableEl);
+    this.applyInitialWidths(tableEl, tableId, match.text);
+    this.setupResizer(tableEl);
+    this.addCellCoordinates(tableEl);
     this.setupMergeInteraction(tableEl);
   }
   resolveTableSource(tableEl, context) {
@@ -1105,10 +1136,34 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range)
       return false;
+    if (direction === "horizontal" && !selectionHasHorizontalSpan2(active.selection))
+      return false;
+    if (direction === "vertical" && !selectionHasVerticalSpan2(active.selection))
+      return false;
     if (!checking) {
       runMergeCommand(this.app, direction, range, active.selection);
     }
     return true;
+  }
+  addMergeItemsToEditorMenu(menu) {
+    var _a;
+    const active = this.activeMergeSelection;
+    if (!active || !active.tableEl.isConnected)
+      return;
+    const range = this.tableRanges.get(active.tableEl) || null;
+    if (!range)
+      return;
+    const selection = active.selection;
+    (_a = menu.addSeparator) == null ? void 0 : _a.call(menu);
+    menu.addItem((item) => {
+      item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!selectionHasHorizontalSpan2(selection)).onClick(() => runMergeCommand(this.app, "horizontal", range, selection));
+    });
+    menu.addItem((item) => {
+      item.setTitle("Merge selected cells vertically").setIcon("rows-3").setDisabled(!selectionHasVerticalSpan2(selection)).onClick(() => runMergeCommand(this.app, "vertical", range, selection));
+    });
+    menu.addItem((item) => {
+      item.setTitle("Unmerge selected cells").setIcon("split-square-horizontal").onClick(() => runUnmergeCommand(this.app, range, selection));
+    });
   }
   runActiveUnmergeCommand(checking) {
     const active = this.activeMergeSelection;

@@ -60,6 +60,18 @@ function getLogicalColumnCount(tableEl: HTMLTableElement): number {
   return colCount;
 }
 
+function isSourceModeTable(tableEl: HTMLTableElement): boolean {
+  return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
+}
+
+function selectionHasHorizontalSpan(selection: CellSelection): boolean {
+  return Math.abs(selection.anchor.col - selection.focus.col) > 0;
+}
+
+function selectionHasVerticalSpan(selection: CellSelection): boolean {
+  return Math.abs(selection.anchor.row - selection.focus.row) > 0;
+}
+
 class SheetExtendRenderChild extends MarkdownRenderChild {
   constructor(
     containerEl: HTMLElement,
@@ -139,6 +151,10 @@ export default class SheetExtendPlugin extends Plugin {
       checkCallback: (checking) => this.runActiveUnmergeCommand(checking),
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowLeft" }],
     });
+
+    this.registerEvent(this.app.workspace.on("editor-menu", (menu: any) => {
+      this.addMergeItemsToEditorMenu(menu);
+    }));
 
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleLivePreviewRefresh()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.scheduleLivePreviewRefresh()));
@@ -225,6 +241,11 @@ export default class SheetExtendPlugin extends Plugin {
       return;
     }
 
+    if (isSourceModeTable(tableEl)) {
+      this.enhanceSourceModeTable(tableEl, tableId, match);
+      return;
+    }
+
     const parsed = this.settings.enableFormulas
       ? applyFormulas(parseAndMerge(match.text))
       : parseAndMerge(match.text);
@@ -236,6 +257,17 @@ export default class SheetExtendPlugin extends Plugin {
     this.applyInitialWidths(tableEl, tableId, match.text);
 
     this.setupResizer(tableEl);
+    this.setupMergeInteraction(tableEl);
+  }
+
+  private enhanceSourceModeTable(tableEl: HTMLTableElement, tableId: string, match: TableMatch): void {
+    tableEl.setAttribute("data-source-path", match.sourcePath);
+    tableEl.setAttribute("data-line-start", String(match.range.startLine));
+    this.tableRanges.set(tableEl, match.range);
+    ensureColgroup(tableEl);
+    this.applyInitialWidths(tableEl, tableId, match.text);
+    this.setupResizer(tableEl);
+    this.addCellCoordinates(tableEl);
     this.setupMergeInteraction(tableEl);
   }
 
@@ -334,10 +366,43 @@ export default class SheetExtendPlugin extends Plugin {
 
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range) return false;
+    if (direction === "horizontal" && !selectionHasHorizontalSpan(active.selection)) return false;
+    if (direction === "vertical" && !selectionHasVerticalSpan(active.selection)) return false;
     if (!checking) {
       runMergeCommand(this.app, direction, range, active.selection);
     }
     return true;
+  }
+
+  private addMergeItemsToEditorMenu(menu: any): void {
+    const active = this.activeMergeSelection;
+    if (!active || !active.tableEl.isConnected) return;
+
+    const range = this.tableRanges.get(active.tableEl) || null;
+    if (!range) return;
+
+    const selection = active.selection;
+    menu.addSeparator?.();
+    menu.addItem((item: any) => {
+      item
+        .setTitle("Merge selected cells horizontally")
+        .setIcon("columns-3")
+        .setDisabled(!selectionHasHorizontalSpan(selection))
+        .onClick(() => runMergeCommand(this.app, "horizontal", range, selection));
+    });
+    menu.addItem((item: any) => {
+      item
+        .setTitle("Merge selected cells vertically")
+        .setIcon("rows-3")
+        .setDisabled(!selectionHasVerticalSpan(selection))
+        .onClick(() => runMergeCommand(this.app, "vertical", range, selection));
+    });
+    menu.addItem((item: any) => {
+      item
+        .setTitle("Unmerge selected cells")
+        .setIcon("split-square-horizontal")
+        .onClick(() => runUnmergeCommand(this.app, range, selection));
+    });
   }
 
   private runActiveUnmergeCommand(checking: boolean): boolean {

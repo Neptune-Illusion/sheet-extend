@@ -22,6 +22,10 @@ export interface MergeInteractionHost {
 
 type RegisteredElement = HTMLTableElement & { sheetExtendMergeInteraction?: MergeInteraction };
 
+function isSourceModeTable(tableEl: HTMLTableElement): boolean {
+  return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
+}
+
 function getCellPosition(cell: HTMLElement): CellPosition | null {
   const row = Number(cell.getAttribute("data-row"));
   const col = Number(cell.getAttribute("data-col"));
@@ -126,8 +130,10 @@ class MergeInteraction {
     }
 
     this.host.setActiveSelection({ tableEl: this.tableEl, selection: this.selection });
-    evt.preventDefault();
-    this.showMenu(evt);
+    if (!isSourceModeTable(this.tableEl)) {
+      evt.preventDefault();
+      this.showMenu(evt);
+    }
   };
 
   private showMenu(evt: MouseEvent): void {
