@@ -768,6 +768,27 @@ function expandSelectionForDirection(tableEl, selection, direction) {
   }
   return null;
 }
+function expandSelectionForUnmerge(tableEl, selection) {
+  const bounds = normalizeSelection2(selection);
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    const position = getCellPosition(cell);
+    if (!position)
+      continue;
+    const rowEnd = position.row + (cell.rowSpan || 1) - 1;
+    const colEnd = position.col + (cell.colSpan || 1) - 1;
+    const intersects = position.row <= bounds.rowEnd && rowEnd >= bounds.rowStart && position.col <= bounds.colEnd && colEnd >= bounds.colStart;
+    if (!intersects)
+      continue;
+    bounds.rowStart = Math.min(bounds.rowStart, position.row);
+    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
+    bounds.colStart = Math.min(bounds.colStart, position.col);
+    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
+  }
+  return {
+    anchor: { row: bounds.rowStart, col: bounds.colStart },
+    focus: { row: bounds.rowEnd, col: bounds.colEnd }
+  };
+}
 function getEditor(app) {
   const view = app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
   return (view == null ? void 0 : view.editor) || null;
@@ -831,7 +852,8 @@ var MergeInteraction = class {
   unmerge() {
     if (!this.selection)
       return false;
-    this.writeSelection((doc, range, selection) => clearMergeInDocument(doc, range, selection).text);
+    const selection = expandSelectionForUnmerge(this.tableEl, this.selection);
+    this.writeSelection((doc, range) => clearMergeInDocument(doc, range, selection).text);
     return true;
   }
   showMenu(evt) {
@@ -955,6 +977,33 @@ function expandSelectionForDirection2(tableEl, selection, direction) {
     return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
   }
   return null;
+}
+function expandSelectionForUnmerge2(tableEl, selection) {
+  const bounds = {
+    rowStart: Math.min(selection.anchor.row, selection.focus.row),
+    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
+    colStart: Math.min(selection.anchor.col, selection.focus.col),
+    colEnd: Math.max(selection.anchor.col, selection.focus.col)
+  };
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    const row = Number(cell.getAttribute("data-row"));
+    const col = Number(cell.getAttribute("data-col"));
+    if (!Number.isInteger(row) || !Number.isInteger(col))
+      continue;
+    const rowEnd = row + (cell.rowSpan || 1) - 1;
+    const colEnd = col + (cell.colSpan || 1) - 1;
+    const intersects = row <= bounds.rowEnd && rowEnd >= bounds.rowStart && col <= bounds.colEnd && colEnd >= bounds.colStart;
+    if (!intersects)
+      continue;
+    bounds.rowStart = Math.min(bounds.rowStart, row);
+    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
+    bounds.colStart = Math.min(bounds.colStart, col);
+    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
+  }
+  return {
+    anchor: { row: bounds.rowStart, col: bounds.colStart },
+    focus: { row: bounds.rowEnd, col: bounds.colEnd }
+  };
 }
 var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   constructor() {
@@ -1244,7 +1293,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       return;
     const horizontalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "horizontal");
     const verticalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "vertical");
-    const selection = active.selection;
+    const unmergeSelection = expandSelectionForUnmerge2(active.tableEl, active.selection);
     (_a = menu.addSeparator) == null ? void 0 : _a.call(menu);
     menu.addItem((item) => {
       item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!horizontalSelection).onClick(() => runMergeCommand(this.app, "horizontal", range, horizontalSelection));
@@ -1253,7 +1302,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       item.setTitle("Merge selected cells vertically").setIcon("rows-3").setDisabled(!verticalSelection).onClick(() => runMergeCommand(this.app, "vertical", range, verticalSelection));
     });
     menu.addItem((item) => {
-      item.setTitle("Unmerge selected cells").setIcon("split-square-horizontal").onClick(() => runUnmergeCommand(this.app, range, selection));
+      item.setTitle("Unmerge selected cells").setIcon("split-square-horizontal").onClick(() => runUnmergeCommand(this.app, range, unmergeSelection));
     });
   }
   runActiveUnmergeCommand(checking) {
@@ -1263,8 +1312,9 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range)
       return false;
+    const selection = expandSelectionForUnmerge2(active.tableEl, active.selection);
     if (!checking) {
-      runUnmergeCommand(this.app, range, active.selection);
+      runUnmergeCommand(this.app, range, selection);
     }
     return true;
   }

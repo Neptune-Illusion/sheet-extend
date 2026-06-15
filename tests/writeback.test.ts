@@ -31,6 +31,14 @@ describe("markdown merge writeback", () => {
     })).toBe("| A | B |\n| --- | --- |\n| 1 |  |\n|  | 4 |");
   });
 
+  it("clears markers when the selected range covers a merged cell span", () => {
+    const table = "| A | B | C |\n| --- | --- | --- |\n| 1 | < | < |";
+    expect(clearMergeMarkers(table, {
+      anchor: { row: 1, col: 0 },
+      focus: { row: 1, col: 2 },
+    })).toBe("| A | B | C |\n| --- | --- | --- |\n| 1 |  |  |");
+  });
+
   it("finds and replaces a table range in document text", () => {
     const doc = "before\n| A | B |\n| --- | --- |\n| 1 | 2 |\nafter";
     const range = findTableRangeAtLine(doc, 2);

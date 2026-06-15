@@ -102,6 +102,41 @@ function expandSelectionForDirection(
   return null;
 }
 
+function expandSelectionForUnmerge(tableEl: HTMLTableElement, selection: CellSelection): CellSelection {
+  const bounds = {
+    rowStart: Math.min(selection.anchor.row, selection.focus.row),
+    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
+    colStart: Math.min(selection.anchor.col, selection.focus.col),
+    colEnd: Math.max(selection.anchor.col, selection.focus.col),
+  };
+
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
+    const row = Number(cell.getAttribute("data-row"));
+    const col = Number(cell.getAttribute("data-col"));
+    if (!Number.isInteger(row) || !Number.isInteger(col)) continue;
+
+    const rowEnd = row + (cell.rowSpan || 1) - 1;
+    const colEnd = col + (cell.colSpan || 1) - 1;
+    const intersects = (
+      row <= bounds.rowEnd &&
+      rowEnd >= bounds.rowStart &&
+      col <= bounds.colEnd &&
+      colEnd >= bounds.colStart
+    );
+    if (!intersects) continue;
+
+    bounds.rowStart = Math.min(bounds.rowStart, row);
+    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
+    bounds.colStart = Math.min(bounds.colStart, col);
+    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
+  }
+
+  return {
+    anchor: { row: bounds.rowStart, col: bounds.colStart },
+    focus: { row: bounds.rowEnd, col: bounds.colEnd },
+  };
+}
+
 class SheetExtendRenderChild extends MarkdownRenderChild {
   constructor(
     containerEl: HTMLElement,
@@ -449,7 +484,7 @@ export default class SheetExtendPlugin extends Plugin {
 
     const horizontalSelection = expandSelectionForDirection(active.tableEl, active.selection, "horizontal");
     const verticalSelection = expandSelectionForDirection(active.tableEl, active.selection, "vertical");
-    const selection = active.selection;
+    const unmergeSelection = expandSelectionForUnmerge(active.tableEl, active.selection);
     menu.addSeparator?.();
     menu.addItem((item: any) => {
       item
@@ -469,7 +504,7 @@ export default class SheetExtendPlugin extends Plugin {
       item
         .setTitle("Unmerge selected cells")
         .setIcon("split-square-horizontal")
-        .onClick(() => runUnmergeCommand(this.app, range, selection));
+        .onClick(() => runUnmergeCommand(this.app, range, unmergeSelection));
     });
   }
 
@@ -479,8 +514,9 @@ export default class SheetExtendPlugin extends Plugin {
 
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range) return false;
+    const selection = expandSelectionForUnmerge(active.tableEl, active.selection);
     if (!checking) {
-      runUnmergeCommand(this.app, range, active.selection);
+      runUnmergeCommand(this.app, range, selection);
     }
     return true;
   }

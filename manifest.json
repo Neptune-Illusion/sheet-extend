@@ -1,7 +1,7 @@
 {
   "id": "sheet-extend",
   "name": "Sheet Extend",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "minAppVersion": "1.5.0",
   "description": "Resizable table columns with cell merging, headers, and sheet blocks",
   "author": "kongg",

@@ -97,6 +97,35 @@ function expandSelectionForDirection(
   return null;
 }
 
+function expandSelectionForUnmerge(tableEl: HTMLTableElement, selection: CellSelection): CellSelection {
+  const bounds = normalizeSelection(selection);
+
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
+    const position = getCellPosition(cell);
+    if (!position) continue;
+
+    const rowEnd = position.row + (cell.rowSpan || 1) - 1;
+    const colEnd = position.col + (cell.colSpan || 1) - 1;
+    const intersects = (
+      position.row <= bounds.rowEnd &&
+      rowEnd >= bounds.rowStart &&
+      position.col <= bounds.colEnd &&
+      colEnd >= bounds.colStart
+    );
+    if (!intersects) continue;
+
+    bounds.rowStart = Math.min(bounds.rowStart, position.row);
+    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
+    bounds.colStart = Math.min(bounds.colStart, position.col);
+    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
+  }
+
+  return {
+    anchor: { row: bounds.rowStart, col: bounds.colStart },
+    focus: { row: bounds.rowEnd, col: bounds.colEnd },
+  };
+}
+
 function getEditor(app: App): Editor | null {
   const view = app.workspace.getActiveViewOfType(MarkdownView);
   return view?.editor || null;
@@ -125,7 +154,8 @@ class MergeInteraction {
 
   unmerge(): boolean {
     if (!this.selection) return false;
-    this.writeSelection((doc, range, selection) => clearMergeInDocument(doc, range, selection).text);
+    const selection = expandSelectionForUnmerge(this.tableEl, this.selection);
+    this.writeSelection((doc, range) => clearMergeInDocument(doc, range, selection).text);
     return true;
   }
 
