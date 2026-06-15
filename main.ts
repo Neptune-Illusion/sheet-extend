@@ -5,6 +5,8 @@ import { renderTable } from "./src/sheet/renderer";
 import { hasMergeMarkers } from "./src/sheet/detect";
 import { makeTableResizable } from "./src/resizer/resizer";
 import { getTableId, saveWidths, loadWidths, applySavedWidths } from "./src/resizer/persistence";
+import { installMergeInteraction, runMergeCommand, runUnmergeCommand } from "./src/merge/interaction";
+import type { CellSelection, TableRange } from "./src/sheet/writeback";
 
 /**
  * Ensure a table has a <colgroup> with one <col> per column.
@@ -53,6 +55,8 @@ class SheetExtendRenderChild extends MarkdownRenderChild {
 export default class SheetExtendPlugin extends Plugin {
   settings: SheetExtendSettings;
   widthStore: { [tableId: string]: (number | null)[] } = {};
+  private tableRanges = new WeakMap<HTMLTableElement, TableRange>();
+  private activeMergeSelection: { tableEl: HTMLTableElement; selection: CellSelection } | null = null;
 
   async onload() {
     await this.loadSettings();
@@ -73,6 +77,34 @@ export default class SheetExtendPlugin extends Plugin {
       const tableEl = el.createEl("table");
       renderTable(this.app, tableEl, parsed, ctx.sourcePath, this);
       this.setupResizer(tableEl);
+      installMergeInteraction({
+        app: this.app,
+        component: this,
+        getTableRange: (table) => this.tableRanges.get(table) || null,
+        setActiveSelection: (context) => {
+          this.activeMergeSelection = context;
+        },
+      }, tableEl);
+    });
+
+    this.addCommand({
+      id: "merge-table-cells-horizontal",
+      name: "Merge selected table cells horizontally",
+      checkCallback: (checking) => this.runActiveMergeCommand(checking, "horizontal"),
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowRight" }],
+    });
+
+    this.addCommand({
+      id: "merge-table-cells-vertical",
+      name: "Merge selected table cells vertically",
+      checkCallback: (checking) => this.runActiveMergeCommand(checking, "vertical"),
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowDown" }],
+    });
+
+    this.addCommand({
+      id: "unmerge-table-cells",
+      name: "Unmerge selected table cells",
+      checkCallback: (checking) => this.runActiveUnmergeCommand(checking),
     });
   }
 
@@ -152,6 +184,10 @@ export default class SheetExtendPlugin extends Plugin {
       if (sectionInfo) {
         const lines = sectionInfo.text.split("\n");
         sourceText = lines.slice(sectionInfo.lineStart, sectionInfo.lineEnd + 1).join("\n");
+        this.tableRanges.set(tableEl, {
+          startLine: sectionInfo.lineStart,
+          endLine: sectionInfo.lineEnd,
+        });
       }
     }
 
@@ -162,7 +198,9 @@ export default class SheetExtendPlugin extends Plugin {
       const view = this.app.workspace.getActiveViewOfType(MarkdownView);
       if (view && view.editor) {
         const fullDoc = view.editor.getValue();
-        sourceText = this.findTableInSource(fullDoc, tableEl);
+        const match = this.findTableInSource(fullDoc, tableEl);
+        sourceText = match?.text || "";
+        if (match) this.tableRanges.set(tableEl, match.range);
       }
     }
 
@@ -207,6 +245,38 @@ export default class SheetExtendPlugin extends Plugin {
     }
 
     this.setupResizer(tableEl);
+    installMergeInteraction({
+      app: this.app,
+      component: this,
+      getTableRange: (table) => this.tableRanges.get(table) || null,
+      setActiveSelection: (context) => {
+        this.activeMergeSelection = context;
+      },
+    }, tableEl);
+  }
+
+  private runActiveMergeCommand(checking: boolean, direction: "horizontal" | "vertical"): boolean {
+    const active = this.activeMergeSelection;
+    if (!active || !active.tableEl.isConnected) return false;
+
+    const range = this.tableRanges.get(active.tableEl) || null;
+    if (!range) return false;
+    if (!checking) {
+      runMergeCommand(this.app, direction, range, active.selection);
+    }
+    return true;
+  }
+
+  private runActiveUnmergeCommand(checking: boolean): boolean {
+    const active = this.activeMergeSelection;
+    if (!active || !active.tableEl.isConnected) return false;
+
+    const range = this.tableRanges.get(active.tableEl) || null;
+    if (!range) return false;
+    if (!checking) {
+      runUnmergeCommand(this.app, range, active.selection);
+    }
+    return true;
   }
 
   /**
@@ -214,17 +284,17 @@ export default class SheetExtendPlugin extends Plugin {
    * corresponds to the rendered table element. Matches by comparing the
    * text content of the first header row cells against source lines.
    */
-  private findTableInSource(fullDoc: string, tableEl: HTMLTableElement): string {
+  private findTableInSource(fullDoc: string, tableEl: HTMLTableElement): { text: string; range: TableRange } | null {
     const lines = fullDoc.split("\n");
 
     const headerRow = tableEl.querySelector("tr");
-    if (!headerRow) return "";
+    if (!headerRow) return null;
     const headerCells: string[] = [];
     for (const th of Array.from(headerRow.querySelectorAll("th, td"))) {
       const text = (th as HTMLElement).textContent?.trim() || "";
       if (text) headerCells.push(text);
     }
-    if (headerCells.length === 0) return "";
+    if (headerCells.length === 0) return null;
 
     let tableStartIdx = -1;
     for (let i = 0; i < lines.length; i++) {
@@ -237,7 +307,7 @@ export default class SheetExtendPlugin extends Plugin {
       }
     }
 
-    if (tableStartIdx < 0) return "";
+    if (tableStartIdx < 0) return null;
 
     let tableEndIdx = tableStartIdx;
     for (let i = tableStartIdx + 1; i < lines.length; i++) {
@@ -249,7 +319,10 @@ export default class SheetExtendPlugin extends Plugin {
       }
     }
 
-    return lines.slice(tableStartIdx, tableEndIdx + 1).join("\n");
+    return {
+      text: lines.slice(tableStartIdx, tableEndIdx + 1).join("\n"),
+      range: { startLine: tableStartIdx, endLine: tableEndIdx },
+    };
   }
 
   private setupResizer(tableEl: HTMLTableElement) {

@@ -26,7 +26,7 @@ __export(main_exports, {
   default: () => SheetExtendPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -410,6 +410,276 @@ function applySavedWidths(tableEl, widths) {
   }
 }
 
+// src/merge/interaction.ts
+var import_obsidian3 = require("obsidian");
+
+// src/sheet/writeback.ts
+function normalizeSelection(selection) {
+  return {
+    rowStart: Math.min(selection.anchor.row, selection.focus.row),
+    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
+    colStart: Math.min(selection.anchor.col, selection.focus.col),
+    colEnd: Math.max(selection.anchor.col, selection.focus.col)
+  };
+}
+function isDelimiterCell(cell) {
+  return /^:?-{3,}:?$/.test(cell.trim());
+}
+function parseLine(line) {
+  const trimmed = line.trim();
+  const hasLeadingPipe = trimmed.startsWith("|");
+  const hasTrailingPipe = trimmed.endsWith("|");
+  let inner = hasLeadingPipe ? trimmed.slice(1) : trimmed;
+  if (hasTrailingPipe)
+    inner = inner.slice(0, -1);
+  return {
+    cells: inner.split("|").map((cell) => cell.trim()),
+    hasLeadingPipe,
+    hasTrailingPipe
+  };
+}
+function serializeLine(parsed) {
+  const body = ` ${parsed.cells.join(" | ")} `;
+  if (parsed.hasLeadingPipe && parsed.hasTrailingPipe)
+    return `|${body}|`;
+  if (parsed.hasLeadingPipe)
+    return `|${body}`;
+  if (parsed.hasTrailingPipe)
+    return `${body}|`;
+  return body.trim();
+}
+function parseTableLines(lines) {
+  const parsed = lines.map(parseLine);
+  const delimiterIndex = parsed.findIndex((line, index) => index > 0 && line.cells.length > 0 && line.cells.every(isDelimiterCell));
+  return { parsed, delimiterIndex };
+}
+function markdownLineForGridRow(gridRow, delimiterIndex) {
+  if (delimiterIndex < 0)
+    return gridRow;
+  return gridRow < delimiterIndex ? gridRow : gridRow + 1;
+}
+function ensureColumn(line, col) {
+  while (line.cells.length <= col) {
+    line.cells.push("");
+  }
+}
+function applyMergeMarkers(tableText, selection, direction) {
+  const lines = tableText.split("\n");
+  const { parsed, delimiterIndex } = parseTableLines(lines);
+  const normalized = normalizeSelection(selection);
+  if (normalized.rowStart === normalized.rowEnd && normalized.colStart === normalized.colEnd) {
+    return tableText;
+  }
+  for (let row = normalized.rowStart; row <= normalized.rowEnd; row++) {
+    const lineIndex = markdownLineForGridRow(row, delimiterIndex);
+    const line = parsed[lineIndex];
+    if (!line)
+      continue;
+    const selectedColStart = normalized.colStart;
+    const selectedColEnd = normalized.colEnd;
+    for (let col = selectedColStart; col <= selectedColEnd; col++) {
+      ensureColumn(line, col);
+      const isAnchor = row === normalized.rowStart && col === normalized.colStart;
+      if (isAnchor)
+        continue;
+      if (direction === "horizontal" && row === normalized.rowStart) {
+        line.cells[col] = "<";
+      } else if (direction === "vertical" && col === normalized.colStart) {
+        line.cells[col] = "^";
+      }
+    }
+  }
+  return parsed.map(serializeLine).join("\n");
+}
+function clearMergeMarkers(tableText, selection) {
+  var _a, _b;
+  const lines = tableText.split("\n");
+  const { parsed, delimiterIndex } = parseTableLines(lines);
+  const normalized = normalizeSelection(selection);
+  for (let row = normalized.rowStart; row <= normalized.rowEnd; row++) {
+    const lineIndex = markdownLineForGridRow(row, delimiterIndex);
+    const line = parsed[lineIndex];
+    if (!line)
+      continue;
+    for (let col = normalized.colStart; col <= normalized.colEnd; col++) {
+      if (((_a = line.cells[col]) == null ? void 0 : _a.trim()) === "<" || ((_b = line.cells[col]) == null ? void 0 : _b.trim()) === "^") {
+        line.cells[col] = "";
+      }
+    }
+  }
+  return parsed.map(serializeLine).join("\n");
+}
+function replaceTableRange(documentText, range, tableText) {
+  const lines = documentText.split("\n");
+  lines.splice(range.startLine, range.endLine - range.startLine + 1, ...tableText.split("\n"));
+  return lines.join("\n");
+}
+function applyMergeToDocument(documentText, range, selection, direction) {
+  const tableText = documentText.split("\n").slice(range.startLine, range.endLine + 1).join("\n");
+  const nextTableText = applyMergeMarkers(tableText, selection, direction);
+  return {
+    text: replaceTableRange(documentText, range, nextTableText),
+    range
+  };
+}
+function clearMergeInDocument(documentText, range, selection) {
+  const tableText = documentText.split("\n").slice(range.startLine, range.endLine + 1).join("\n");
+  const nextTableText = clearMergeMarkers(tableText, selection);
+  return {
+    text: replaceTableRange(documentText, range, nextTableText),
+    range
+  };
+}
+
+// src/merge/interaction.ts
+function getCellPosition(cell) {
+  const row = Number(cell.getAttribute("data-row"));
+  const col = Number(cell.getAttribute("data-col"));
+  if (!Number.isInteger(row) || !Number.isInteger(col))
+    return null;
+  return { row, col };
+}
+function normalizeSelection2(selection) {
+  return {
+    rowStart: Math.min(selection.anchor.row, selection.focus.row),
+    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
+    colStart: Math.min(selection.anchor.col, selection.focus.col),
+    colEnd: Math.max(selection.anchor.col, selection.focus.col)
+  };
+}
+function containsPosition(selection, position) {
+  const bounds = normalizeSelection2(selection);
+  return position.row >= bounds.rowStart && position.row <= bounds.rowEnd && position.col >= bounds.colStart && position.col <= bounds.colEnd;
+}
+function selectionHasHorizontalSpan(selection) {
+  const bounds = normalizeSelection2(selection);
+  return bounds.colEnd > bounds.colStart;
+}
+function selectionHasVerticalSpan(selection) {
+  const bounds = normalizeSelection2(selection);
+  return bounds.rowEnd > bounds.rowStart;
+}
+function getEditor(app) {
+  const view = app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
+  return (view == null ? void 0 : view.editor) || null;
+}
+var MergeInteraction = class {
+  constructor(host, tableEl) {
+    this.host = host;
+    this.tableEl = tableEl;
+    this.selection = null;
+    this.handleClick = (evt) => {
+      const target = evt.target;
+      if (target.closest(".sheet-extend-resizer"))
+        return;
+      const cell = target.closest("th, td");
+      if (!cell || !this.tableEl.contains(cell))
+        return;
+      const position = getCellPosition(cell);
+      if (!position)
+        return;
+      if (evt.shiftKey && this.selection) {
+        this.selection = { anchor: this.selection.anchor, focus: position };
+      } else {
+        this.selection = { anchor: position, focus: position };
+      }
+      this.host.setActiveSelection({ tableEl: this.tableEl, selection: this.selection });
+      this.paintSelection();
+    };
+    this.handleContextMenu = (evt) => {
+      const cell = evt.target.closest("th, td");
+      if (!cell || !this.tableEl.contains(cell))
+        return;
+      const position = getCellPosition(cell);
+      if (!position)
+        return;
+      if (!this.selection || !containsPosition(this.selection, position)) {
+        this.selection = { anchor: position, focus: position };
+        this.paintSelection();
+      }
+      this.host.setActiveSelection({ tableEl: this.tableEl, selection: this.selection });
+      evt.preventDefault();
+      this.showMenu(evt);
+    };
+    this.tableEl.classList.add("sheet-extend-merge-enabled");
+    this.host.component.registerDomEvent(this.tableEl, "click", this.handleClick);
+    this.host.component.registerDomEvent(this.tableEl, "contextmenu", this.handleContextMenu);
+  }
+  getSelection() {
+    return this.selection;
+  }
+  merge(direction) {
+    if (!this.selection)
+      return false;
+    this.writeSelection((doc, range, selection) => applyMergeToDocument(doc, range, selection, direction).text);
+    return true;
+  }
+  unmerge() {
+    if (!this.selection)
+      return false;
+    this.writeSelection((doc, range, selection) => clearMergeInDocument(doc, range, selection).text);
+    return true;
+  }
+  showMenu(evt) {
+    const selection = this.selection;
+    if (!selection)
+      return;
+    const menu = new import_obsidian3.Menu();
+    menu.addItem((item) => {
+      item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!selectionHasHorizontalSpan(selection)).onClick(() => this.merge("horizontal"));
+    });
+    menu.addItem((item) => {
+      item.setTitle("Merge selected cells vertically").setIcon("rows-3").setDisabled(!selectionHasVerticalSpan(selection)).onClick(() => this.merge("vertical"));
+    });
+    menu.addSeparator();
+    menu.addItem((item) => {
+      item.setTitle("Unmerge selected cells").setIcon("split-square-horizontal").onClick(() => this.unmerge());
+    });
+    menu.showAtMouseEvent(evt);
+  }
+  paintSelection() {
+    const selection = this.selection;
+    for (const cell of Array.from(this.tableEl.querySelectorAll("th, td"))) {
+      const position = getCellPosition(cell);
+      const selected = !!selection && !!position && containsPosition(selection, position);
+      cell.toggleClass("sheet-extend-cell-selected", selected);
+    }
+  }
+  writeSelection(getNextDocument) {
+    if (!this.selection)
+      return;
+    const editor = getEditor(this.host.app);
+    const range = this.host.getTableRange(this.tableEl);
+    if (!editor || !range)
+      return;
+    const nextText = getNextDocument(editor.getValue(), range, this.selection);
+    editor.setValue(nextText);
+    editor.setCursor({ line: range.startLine, ch: 0 });
+  }
+};
+function installMergeInteraction(host, tableEl) {
+  const registered = tableEl;
+  if (registered.sheetExtendMergeInteraction)
+    return;
+  registered.sheetExtendMergeInteraction = new MergeInteraction(host, tableEl);
+}
+function runMergeCommand(app, direction, range, selection) {
+  const editor = getEditor(app);
+  if (!editor || !range || !selection)
+    return false;
+  editor.setValue(applyMergeToDocument(editor.getValue(), range, selection, direction).text);
+  editor.setCursor({ line: range.startLine, ch: 0 });
+  return true;
+}
+function runUnmergeCommand(app, range, selection) {
+  const editor = getEditor(app);
+  if (!editor || !range || !selection)
+    return false;
+  editor.setValue(clearMergeInDocument(editor.getValue(), range, selection).text);
+  editor.setCursor({ line: range.startLine, ch: 0 });
+  return true;
+}
+
 // main.ts
 function ensureColgroup(tableEl) {
   if (tableEl.querySelector("colgroup"))
@@ -426,10 +696,12 @@ function ensureColgroup(tableEl) {
   }
   tableEl.insertBefore(colgroup, tableEl.firstChild);
 }
-var SheetExtendPlugin = class extends import_obsidian3.Plugin {
+var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
     this.widthStore = {};
+    this.tableRanges = /* @__PURE__ */ new WeakMap();
+    this.activeMergeSelection = null;
   }
   async onload() {
     await this.loadSettings();
@@ -437,7 +709,7 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
     this.registerMarkdownPostProcessor((element, context) => {
       if (!this.settings.nativeProcessing)
         return;
-      if (!this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView))
+      if (!this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView))
         return;
       const tables = Array.from(element.querySelectorAll("table:not([id='obsidian-sheets-parsed'])"));
       for (const tableEl of tables) {
@@ -449,6 +721,31 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
       const tableEl = el.createEl("table");
       renderTable(this.app, tableEl, parsed, ctx.sourcePath, this);
       this.setupResizer(tableEl);
+      installMergeInteraction({
+        app: this.app,
+        component: this,
+        getTableRange: (table) => this.tableRanges.get(table) || null,
+        setActiveSelection: (context) => {
+          this.activeMergeSelection = context;
+        }
+      }, tableEl);
+    });
+    this.addCommand({
+      id: "merge-table-cells-horizontal",
+      name: "Merge selected table cells horizontally",
+      checkCallback: (checking) => this.runActiveMergeCommand(checking, "horizontal"),
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowRight" }]
+    });
+    this.addCommand({
+      id: "merge-table-cells-vertical",
+      name: "Merge selected table cells vertically",
+      checkCallback: (checking) => this.runActiveMergeCommand(checking, "vertical"),
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowDown" }]
+    });
+    this.addCommand({
+      id: "unmerge-table-cells",
+      name: "Unmerge selected table cells",
+      checkCallback: (checking) => this.runActiveUnmergeCommand(checking)
     });
   }
   /**
@@ -458,7 +755,7 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
    * This method reads directly from the CM6 editor to get untouched source.
    */
   getSourceFromEditor() {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
     if (!view)
       return null;
     const editor = view.editor;
@@ -515,13 +812,20 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
       if (sectionInfo) {
         const lines = sectionInfo.text.split("\n");
         sourceText = lines.slice(sectionInfo.lineStart, sectionInfo.lineEnd + 1).join("\n");
+        this.tableRanges.set(tableEl, {
+          startLine: sectionInfo.lineStart,
+          endLine: sectionInfo.lineEnd
+        });
       }
     }
     if (!sourceText) {
-      const view = this.app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
+      const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
       if (view && view.editor) {
         const fullDoc = view.editor.getValue();
-        sourceText = this.findTableInSource(fullDoc, tableEl);
+        const match = this.findTableInSource(fullDoc, tableEl);
+        sourceText = (match == null ? void 0 : match.text) || "";
+        if (match)
+          this.tableRanges.set(tableEl, match.range);
       }
     }
     if (!sourceText) {
@@ -556,6 +860,38 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
       applySavedWidths(tableEl, savedWidths);
     }
     this.setupResizer(tableEl);
+    installMergeInteraction({
+      app: this.app,
+      component: this,
+      getTableRange: (table) => this.tableRanges.get(table) || null,
+      setActiveSelection: (context2) => {
+        this.activeMergeSelection = context2;
+      }
+    }, tableEl);
+  }
+  runActiveMergeCommand(checking, direction) {
+    const active = this.activeMergeSelection;
+    if (!active || !active.tableEl.isConnected)
+      return false;
+    const range = this.tableRanges.get(active.tableEl) || null;
+    if (!range)
+      return false;
+    if (!checking) {
+      runMergeCommand(this.app, direction, range, active.selection);
+    }
+    return true;
+  }
+  runActiveUnmergeCommand(checking) {
+    const active = this.activeMergeSelection;
+    if (!active || !active.tableEl.isConnected)
+      return false;
+    const range = this.tableRanges.get(active.tableEl) || null;
+    if (!range)
+      return false;
+    if (!checking) {
+      runUnmergeCommand(this.app, range, active.selection);
+    }
+    return true;
   }
   /**
    * Locate the raw markdown table block in the full document source that
@@ -567,7 +903,7 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
     const lines = fullDoc.split("\n");
     const headerRow = tableEl.querySelector("tr");
     if (!headerRow)
-      return "";
+      return null;
     const headerCells = [];
     for (const th of Array.from(headerRow.querySelectorAll("th, td"))) {
       const text = ((_a = th.textContent) == null ? void 0 : _a.trim()) || "";
@@ -575,7 +911,7 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
         headerCells.push(text);
     }
     if (headerCells.length === 0)
-      return "";
+      return null;
     let tableStartIdx = -1;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -588,7 +924,7 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
       }
     }
     if (tableStartIdx < 0)
-      return "";
+      return null;
     let tableEndIdx = tableStartIdx;
     for (let i = tableStartIdx + 1; i < lines.length; i++) {
       const trimmed = lines[i].trim();
@@ -598,7 +934,10 @@ var SheetExtendPlugin = class extends import_obsidian3.Plugin {
         break;
       }
     }
-    return lines.slice(tableStartIdx, tableEndIdx + 1).join("\n");
+    return {
+      text: lines.slice(tableStartIdx, tableEndIdx + 1).join("\n"),
+      range: { startLine: tableStartIdx, endLine: tableEndIdx }
+    };
   }
   setupResizer(tableEl) {
     const tableId = getTableId(tableEl);
