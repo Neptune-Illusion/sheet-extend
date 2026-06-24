@@ -1,6 +1,7 @@
 /**
- * Detect merge markers (< or ^) in markdown table source text.
- * A merge marker is a cell whose trimmed content is exactly "<" or "^".
+ * Detect merge markers in markdown table source text.
+ * A merge marker is a cell whose trimmed content is exactly "<" or "^", or
+ * a hidden sheet extend marker comment written by the plugin.
  * HTML tags like <font>, <br>, </font> must NOT be treated as merge markers.
  */
 export function hasMergeMarkers(text: string): boolean {
@@ -18,10 +19,33 @@ export function hasMergeMarkers(text: string): boolean {
     const cells = stripped.split("|").map((c) => c.trim());
 
     for (const cell of cells) {
-      // A merge marker is exactly "<" or "^" as the sole cell content
-      if (cell === "<" || cell === "^") {
+      if (isMergeMarkerCell(cell)) {
         return true;
       }
+    }
+  }
+  return false;
+}
+
+export function isMergeLeftMarker(value: string | undefined): boolean {
+  const text = (value || "").trim();
+  return text === "<" || text === "<!-- sheet-extend:merge-left -->";
+}
+
+export function isMergeUpMarker(value: string | undefined): boolean {
+  const text = (value || "").trim();
+  return text === "^" || text === "<!-- sheet-extend:merge-up -->";
+}
+
+export function isMergeMarkerCell(value: string | undefined): boolean {
+  return isMergeLeftMarker(value) || isMergeUpMarker(value);
+}
+
+export function hasMergeMarkersInElement(tableEl: HTMLTableElement): boolean {
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    const text = (cell.textContent || "").trim();
+    if (isMergeMarkerCell(text)) {
+      return true;
     }
   }
   return false;

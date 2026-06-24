@@ -18,6 +18,7 @@ export interface MergeInteractionHost {
   component: Component;
   getTableRange(tableEl: HTMLTableElement): TableRange | null;
   setActiveSelection(context: MergeActionContext): void;
+  onDocumentChanged?(): void;
 }
 
 type RegisteredElement = HTMLTableElement & { sheetExtendMergeInteraction?: MergeInteraction };
@@ -249,6 +250,7 @@ class MergeInteraction {
     const nextText = getNextDocument(editor.getValue(), range, this.selection);
     editor.setValue(nextText);
     editor.setCursor({ line: range.startLine, ch: 0 });
+    this.host.onDocumentChanged?.();
   }
 }
 

@@ -8,6 +8,11 @@ describe("merge detection", () => {
     expect(hasMergeMarkers("| a | b |\n| --- | --- |")).toBe(false);
   });
 
+  it("detects hidden merge marker comments", () => {
+    expect(hasMergeMarkers("| a | <!-- sheet-extend:merge-left --> |\n| --- | --- |")).toBe(true);
+    expect(hasMergeMarkers("| a |\n| --- |\n| b |\n| <!-- sheet-extend:merge-up --> |")).toBe(true);
+  });
+
   it("detects ^ vertical merge marker", () => {
     expect(hasMergeMarkers("| a |\n| --- |\n| b |\n| ^ |")).toBe(true);
   });
@@ -45,8 +50,26 @@ describe("parseAndMerge", () => {
     expect(parsed.grid[0][1].hidden).toBe(true);
   });
 
+  it("applies horizontal merges in body rows", () => {
+    const parsed = parseAndMerge(`| A | B |\n| --- | --- |\n| left | < |`);
+    expect(parsed.grid[1][0].colspan).toBe(2);
+    expect(parsed.grid[1][1].hidden).toBe(true);
+  });
+
+  it("applies hidden horizontal merge markers", () => {
+    const parsed = parseAndMerge(`| A | B |\n| --- | --- |\n| left | <!-- sheet-extend:merge-left --> |`);
+    expect(parsed.grid[1][0].colspan).toBe(2);
+    expect(parsed.grid[1][1].hidden).toBe(true);
+  });
+
   it("applies vertical merges", () => {
     const parsed = parseAndMerge(`| A |\n| --- |\n| B |\n| ^ |`);
+    expect(parsed.grid[1][0].rowspan).toBe(2);
+    expect(parsed.grid[2][0].hidden).toBe(true);
+  });
+
+  it("applies hidden vertical merge markers", () => {
+    const parsed = parseAndMerge(`| A |\n| --- |\n| B |\n| <!-- sheet-extend:merge-up --> |`);
     expect(parsed.grid[1][0].rowspan).toBe(2);
     expect(parsed.grid[2][0].hidden).toBe(true);
   });

@@ -1,7 +1,7 @@
 {
   "name": "sheet-extend",
-  "version": "1.4.3",
-  "description": "Obsidian plugin: resizable columns + sheet features",
+  "version": "1.4.4",
+  "description": "Obsidian plugin for resizable markdown tables with cell merging, formulas, and cross-mode width sync",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

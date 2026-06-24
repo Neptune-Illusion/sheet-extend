@@ -1,3 +1,5 @@
+import { isMergeLeftMarker, isMergeMarkerCell, isMergeUpMarker } from "./detect";
+
 export interface Cell {
   text: string;
   colspan: number;
@@ -13,7 +15,7 @@ export interface ParsedTable {
 
 export function parseTable(text: string): ParsedTable {
   const lines = text
-    .split("\n")
+    .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
@@ -93,7 +95,7 @@ export function applyMerges(grid: Cell[][]): void {
       const cell = grid[r][c];
       if (cell.hidden) continue;
 
-      if (cell.text === "<" && c > 0) {
+      if (isMergeLeftMarker(cell.text) && c > 0) {
         for (let pc = c - 1; pc >= 0; pc--) {
           const prev = grid[r][pc];
           if (!prev.hidden) {
@@ -102,7 +104,7 @@ export function applyMerges(grid: Cell[][]): void {
             break;
           }
         }
-      } else if (cell.text === "^" && r > 0) {
+      } else if (isMergeUpMarker(cell.text) && r > 0) {
         for (let pr = r - 1; pr >= 0; pr--) {
           const prev = grid[pr][c];
           if (!prev.hidden) {
@@ -124,7 +126,7 @@ export function stripMergeMarkers(grid: Cell[][]): void {
         // "<" or "^". Do NOT strip < or ^ from cells containing HTML tags
         // or other content.
         const trimmed = cell.text.trim();
-        if (trimmed === "<" || trimmed === "^") {
+        if (isMergeMarkerCell(trimmed)) {
           cell.text = "";
         }
       }

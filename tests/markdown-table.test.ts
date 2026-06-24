@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSeparatorLineForWidths,
   buildSeparatorLine,
   extractMarkdownTableSpecs,
+  matchMarkdownTableSpecForElement,
   parseSeparatorLine,
   updateSeparatorLineForWidths,
 } from "../src/sheet/markdown-table";
@@ -33,5 +35,47 @@ describe("markdown table specs", () => {
     );
 
     expect(next).toBe("before\n| A | B |\n| ---------- | ---------------: |\n| 1 | 2 |\nafter");
+  });
+
+  it("preserves CRLF line endings when updating separator widths", () => {
+    const doc = "before\r\n| A | B |\r\n| --- | --- |\r\n| 1 | 2 |\r\nafter";
+    const next = updateSeparatorLineForWidths(
+      doc,
+      { startLine: 1, endLine: 3 },
+      [80, 120],
+      8
+    );
+
+    expect(next).toBe("before\r\n| A | B |\r\n| ---------- | --------------- |\r\n| 1 | 2 |\r\nafter");
+  });
+
+  it("builds a replacement separator line without rewriting the whole document", () => {
+    expect(buildSeparatorLineForWidths("| :--- | ---: |", [32, 48], 8)).toBe("| :---- | ------: |");
+  });
+
+  it("matches repeated headers by body/content signature instead of first header occurrence", () => {
+    const doc = [
+      "| Name | Value |",
+      "| --- | --- |",
+      "| alpha | 1 |",
+      "",
+      "| Name | Value |",
+      "| --- | --- |",
+      "| beta | 2 |",
+    ].join("\n");
+    const specs = extractMarkdownTableSpecs(doc);
+    const table = document.createElement("table");
+    table.innerHTML = "<tr><th>Name</th><th>Value</th></tr><tr><td>beta</td><td>2</td></tr>";
+
+    expect(matchMarkdownTableSpecForElement(specs, table)?.range).toEqual({ startLine: 4, endLine: 6 });
+  });
+
+  it("normalizes markdown formatting when matching rendered tables", () => {
+    const doc = "| **Name** | `Value` |\n| --- | --- |\n| [[alpha]] | 1 |";
+    const specs = extractMarkdownTableSpecs(doc);
+    const table = document.createElement("table");
+    table.innerHTML = "<tr><th>Name</th><th>Value</th></tr><tr><td>alpha</td><td>1</td></tr>";
+
+    expect(matchMarkdownTableSpecForElement(specs, table)?.range).toEqual({ startLine: 0, endLine: 2 });
   });
 });

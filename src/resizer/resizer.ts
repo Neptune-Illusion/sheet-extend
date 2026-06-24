@@ -1,12 +1,20 @@
 import { Plugin } from "obsidian";
 
+export interface ResizeCallbacks {
+  onResizeStart?: () => void;
+  onResizeEnd: (widths: (number | null)[]) => void;
+}
+
 export function makeTableResizable(
   plugin: Plugin,
   tableEl: HTMLTableElement,
-  onWidthsChanged: (widths: (number | null)[]) => void
+  callbacks: ResizeCallbacks | ((widths: (number | null)[]) => void)
 ): void {
   if (tableEl.hasAttribute("data-resizable")) return;
   tableEl.setAttribute("data-resizable", "true");
+
+  const resizeCallbacks: ResizeCallbacks =
+    typeof callbacks === "function" ? { onResizeEnd: callbacks } : callbacks;
 
   const settings = (plugin as any).settings as {
     minWidth: number;
@@ -41,6 +49,7 @@ export function makeTableResizable(
 
       tableEl.setAttribute("data-resizing", "true");
       document.body.classList.add("sheet-extend-resizing");
+      resizeCallbacks.onResizeStart?.();
 
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
@@ -67,7 +76,7 @@ export function makeTableResizable(
       const widths = cols.map((col) =>
         col.style.width ? parseInt(col.style.width) : null
       );
-      onWidthsChanged(widths);
+      resizeCallbacks.onResizeEnd(widths);
     };
   }
 }

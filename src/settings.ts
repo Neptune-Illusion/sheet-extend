@@ -40,7 +40,7 @@ export class SheetExtendSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Sheet Extend Settings" });
+    containerEl.createEl("h2", { text: "sheet extend settings" });
 
     new Setting(containerEl)
       .setName("Minimum column width")

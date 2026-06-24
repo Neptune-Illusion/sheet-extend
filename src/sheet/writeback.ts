@@ -1,3 +1,5 @@
+import { isMergeMarkerCell } from "./detect";
+
 export interface TableRange {
   startLine: number;
   endLine: number;
@@ -24,6 +26,14 @@ interface ParsedLine {
   cells: string[];
   hasLeadingPipe: boolean;
   hasTrailingPipe: boolean;
+}
+
+function getLineEnding(text: string): "\r\n" | "\n" {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
+function splitLines(text: string): string[] {
+  return text.split(/\r?\n/);
 }
 
 function normalizeSelection(selection: CellSelection): {
@@ -71,7 +81,7 @@ function serializeLine(parsed: ParsedLine): string {
 }
 
 export function findTableRangeAtLine(text: string, lineNumber: number): TableRange | null {
-  const lines = text.split("\n");
+  const lines = splitLines(text);
   if (lineNumber < 0 || lineNumber >= lines.length || !isTableLine(lines[lineNumber])) {
     return null;
   }
@@ -108,12 +118,20 @@ function ensureColumn(line: ParsedLine, col: number): void {
   }
 }
 
+function isMergeMarker(value: string | undefined): boolean {
+  return isMergeMarkerCell(value);
+}
+
+const HIDDEN_MERGE_LEFT = "<!-- sheet-extend:merge-left -->";
+const HIDDEN_MERGE_UP = "<!-- sheet-extend:merge-up -->";
+
 export function applyMergeMarkers(
   tableText: string,
   selection: CellSelection,
   direction: MergeDirection
 ): string {
-  const lines = tableText.split("\n");
+  const lines = splitLines(tableText);
+  const lineEnding = getLineEnding(tableText);
   const { parsed, delimiterIndex } = parseTableLines(lines);
   const normalized = normalizeSelection(selection);
 
@@ -126,6 +144,13 @@ export function applyMergeMarkers(
     const line = parsed[lineIndex];
     if (!line) continue;
 
+    if (
+      row === normalized.rowStart &&
+      isMergeMarker(line.cells[normalized.colStart])
+    ) {
+      return tableText;
+    }
+
     const selectedColStart = normalized.colStart;
     const selectedColEnd = normalized.colEnd;
     for (let col = selectedColStart; col <= selectedColEnd; col++) {
@@ -134,18 +159,19 @@ export function applyMergeMarkers(
       if (isAnchor) continue;
 
       if (direction === "horizontal" && row === normalized.rowStart) {
-        line.cells[col] = "<";
+        line.cells[col] = HIDDEN_MERGE_LEFT;
       } else if (direction === "vertical" && col === normalized.colStart) {
-        line.cells[col] = "^";
+        line.cells[col] = HIDDEN_MERGE_UP;
       }
     }
   }
 
-  return parsed.map(serializeLine).join("\n");
+  return parsed.map(serializeLine).join(lineEnding);
 }
 
 export function clearMergeMarkers(tableText: string, selection: CellSelection): string {
-  const lines = tableText.split("\n");
+  const lines = splitLines(tableText);
+  const lineEnding = getLineEnding(tableText);
   const { parsed, delimiterIndex } = parseTableLines(lines);
   const normalized = normalizeSelection(selection);
 
@@ -155,13 +181,13 @@ export function clearMergeMarkers(tableText: string, selection: CellSelection): 
     if (!line) continue;
 
     for (let col = normalized.colStart; col <= normalized.colEnd; col++) {
-      if (line.cells[col]?.trim() === "<" || line.cells[col]?.trim() === "^") {
+      if (isMergeMarker(line.cells[col])) {
         line.cells[col] = "";
       }
     }
   }
 
-  return parsed.map(serializeLine).join("\n");
+  return parsed.map(serializeLine).join(lineEnding);
 }
 
 export function replaceTableRange(
@@ -169,9 +195,10 @@ export function replaceTableRange(
   range: TableRange,
   tableText: string
 ): string {
-  const lines = documentText.split("\n");
-  lines.splice(range.startLine, range.endLine - range.startLine + 1, ...tableText.split("\n"));
-  return lines.join("\n");
+  const lines = splitLines(documentText);
+  const lineEnding = getLineEnding(documentText);
+  lines.splice(range.startLine, range.endLine - range.startLine + 1, ...splitLines(tableText));
+  return lines.join(lineEnding);
 }
 
 export function applyMergeToDocument(
@@ -180,7 +207,8 @@ export function applyMergeToDocument(
   selection: CellSelection,
   direction: MergeDirection
 ): MergeWritebackResult {
-  const tableText = documentText.split("\n").slice(range.startLine, range.endLine + 1).join("\n");
+  const lineEnding = getLineEnding(documentText);
+  const tableText = splitLines(documentText).slice(range.startLine, range.endLine + 1).join(lineEnding);
   const nextTableText = applyMergeMarkers(tableText, selection, direction);
   return {
     text: replaceTableRange(documentText, range, nextTableText),
@@ -193,7 +221,8 @@ export function clearMergeInDocument(
   range: TableRange,
   selection: CellSelection
 ): MergeWritebackResult {
-  const tableText = documentText.split("\n").slice(range.startLine, range.endLine + 1).join("\n");
+  const lineEnding = getLineEnding(documentText);
+  const tableText = splitLines(documentText).slice(range.startLine, range.endLine + 1).join(lineEnding);
   const nextTableText = clearMergeMarkers(tableText, selection);
   return {
     text: replaceTableRange(documentText, range, nextTableText),

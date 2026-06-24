@@ -1,14 +1,27 @@
 import { Plugin } from "obsidian";
 
 export function getTableId(tableEl: HTMLTableElement): string {
+  return getTableIds(tableEl)[0];
+}
+
+export function getTableIds(tableEl: HTMLTableElement): string[] {
   const sourcePath = tableEl.getAttribute("data-source-path");
   const lineStart = tableEl.getAttribute("data-line-start");
+  const ordinal = tableEl.dataset.sheetExtendTableOrdinal;
+  const ids: string[] = [];
+
   if (sourcePath && lineStart) {
-    return `table-${sourcePath}-${lineStart}`;
+    ids.push(`table-${sourcePath}-${lineStart}`);
   }
+  if (sourcePath && ordinal) {
+    ids.push(`table-${sourcePath}-ordinal-${ordinal}`);
+  }
+
   const text = tableEl.textContent || "";
   const hash = text.slice(0, 100).replace(/\s+/g, " ").trim();
-  return `table-fallback-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`;
+  ids.push(`table-fallback-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`);
+
+  return Array.from(new Set(ids));
 }
 
 export interface WidthStore {
@@ -17,15 +30,18 @@ export interface WidthStore {
 
 export function saveWidths(
   plugin: Plugin,
-  tableId: string,
+  tableId: string | string[],
   widths: (number | null)[]
 ): void {
   const store: WidthStore = (plugin as any).widthStore || {};
+  const tableIds = Array.isArray(tableId) ? tableId : [tableId];
   const hasData = widths.some((w) => w !== null);
-  if (hasData) {
-    store[tableId] = widths;
-  } else {
-    delete store[tableId];
+  for (const id of tableIds) {
+    if (hasData) {
+      store[id] = widths;
+    } else {
+      delete store[id];
+    }
   }
   (plugin as any).widthStore = store;
   plugin.saveData({
@@ -37,10 +53,16 @@ export function saveWidths(
 
 export function loadWidths(
   plugin: Plugin,
-  tableId: string
+  tableId: string | string[]
 ): (number | null)[] | null {
   const store: WidthStore = (plugin as any).widthStore || {};
-  return store[tableId] || null;
+  const tableIds = Array.isArray(tableId) ? tableId : [tableId];
+  for (const id of tableIds) {
+    if (store[id]) {
+      return store[id];
+    }
+  }
+  return null;
 }
 
 export function applySavedWidths(
