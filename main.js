@@ -197,6 +197,7 @@ function parseTable(text) {
 }
 function applyMerges(grid) {
   for (let r = 0; r < grid.length; r++) {
+    const extendedVertically = /* @__PURE__ */ new Set();
     for (let c = 0; c < grid[r].length; c++) {
       const cell = grid[r][c];
       if (cell.hidden)
@@ -212,9 +213,19 @@ function applyMerges(grid) {
         }
       } else if (isMergeUpMarker(cell.text) && r > 0) {
         for (let pr = r - 1; pr >= 0; pr--) {
-          const prev = grid[pr][c];
-          if (!prev.hidden) {
-            prev.rowspan = (prev.rowspan || 1) + 1;
+          let anchor = null;
+          for (let pc = 0; pc < grid[pr].length; pc++) {
+            const prev = grid[pr][pc];
+            if (!prev.hidden && c >= pc && c < pc + (prev.colspan || 1) && pr + (prev.rowspan || 1) >= r) {
+              anchor = prev;
+              break;
+            }
+          }
+          if (anchor) {
+            if (!extendedVertically.has(anchor)) {
+              anchor.rowspan = (anchor.rowspan || 1) + 1;
+              extendedVertically.add(anchor);
+            }
             cell.hidden = true;
             break;
           }
@@ -872,9 +883,6 @@ function clearMergeInDocument(documentText, range, selection) {
 }
 
 // src/merge/interaction.ts
-function isSourceModeTable(tableEl) {
-  return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
-}
 function getCellPosition(cell) {
   const row = Number(cell.getAttribute("data-row"));
   const col = Number(cell.getAttribute("data-col"));
@@ -937,10 +945,8 @@ var MergeInteraction = class {
         this.paintSelection();
       }
       this.host.setActiveSelection({ tableEl: this.tableEl, selection: this.selection });
-      if (!isSourceModeTable(this.tableEl)) {
-        evt.preventDefault();
-        this.showMenu(evt);
-      }
+      evt.preventDefault();
+      this.showMenu(evt);
     };
     this.tableEl.classList.add("sheet-extend-merge-enabled");
     this.host.component.registerDomEvent(this.tableEl, "click", this.handleClick);
@@ -1140,7 +1146,7 @@ function getLogicalColumnCount(tableEl) {
   }
   return colCount;
 }
-function isSourceModeTable2(tableEl) {
+function isSourceModeTable(tableEl) {
   return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
 }
 var SheetExtendPlugin = class extends import_obsidian4.Plugin {
@@ -1321,7 +1327,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       this.enhancePlainTable(tableEl, context, match);
       return;
     }
-    if (isSourceModeTable2(tableEl)) {
+    if (isSourceModeTable(tableEl)) {
       this.enhanceSourceModeTable(tableEl, match);
       return;
     }

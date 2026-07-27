@@ -91,6 +91,7 @@ export function parseTable(text: string): ParsedTable {
 
 export function applyMerges(grid: Cell[][]): void {
   for (let r = 0; r < grid.length; r++) {
+    const extendedVertically = new Set<Cell>();
     for (let c = 0; c < grid[r].length; c++) {
       const cell = grid[r][c];
       if (cell.hidden) continue;
@@ -105,10 +106,28 @@ export function applyMerges(grid: Cell[][]): void {
           }
         }
       } else if (isMergeUpMarker(cell.text) && r > 0) {
+        // A vertical marker can sit under a horizontally merged cell.
+        // Find the visible cell whose colspan covers this logical column,
+        // rather than only checking grid[previousRow][c].
         for (let pr = r - 1; pr >= 0; pr--) {
-          const prev = grid[pr][c];
-          if (!prev.hidden) {
-            prev.rowspan = (prev.rowspan || 1) + 1;
+          let anchor: Cell | null = null;
+          for (let pc = 0; pc < grid[pr].length; pc++) {
+            const prev = grid[pr][pc];
+            if (
+              !prev.hidden &&
+              c >= pc &&
+              c < pc + (prev.colspan || 1) &&
+              pr + (prev.rowspan || 1) >= r
+            ) {
+              anchor = prev;
+              break;
+            }
+          }
+          if (anchor) {
+            if (!extendedVertically.has(anchor)) {
+              anchor.rowspan = (anchor.rowspan || 1) + 1;
+              extendedVertically.add(anchor);
+            }
             cell.hidden = true;
             break;
           }

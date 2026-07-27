@@ -24,10 +24,6 @@ export interface MergeInteractionHost {
 
 type RegisteredElement = HTMLTableElement & { sheetExtendMergeInteraction?: MergeInteraction };
 
-function isSourceModeTable(tableEl: HTMLTableElement): boolean {
-  return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
-}
-
 function getCellPosition(cell: HTMLElement): CellPosition | null {
   const row = Number(cell.getAttribute("data-row"));
   const col = Number(cell.getAttribute("data-col"));
@@ -129,10 +125,11 @@ class MergeInteraction {
     }
 
     this.host.setActiveSelection({ tableEl: this.tableEl, selection: this.selection });
-    if (!isSourceModeTable(this.tableEl)) {
-      evt.preventDefault();
-      this.showMenu(evt);
-    }
+    // Own the table context menu in both Reading View and Live Preview.
+    // Delegating Live Preview to editor-menu loses the cell selection before
+    // the menu action is invoked, making unmerge appear to do nothing.
+    evt.preventDefault();
+    this.showMenu(evt);
   };
 
   private showMenu(evt: MouseEvent): void {

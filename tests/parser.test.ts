@@ -68,6 +68,20 @@ describe("parseAndMerge", () => {
     expect(parsed.grid[2][0].hidden).toBe(true);
   });
 
+  it("maps vertical markers under a horizontally merged cell to the same anchor", () => {
+    const parsed = parseAndMerge([
+      "| 基本原则 | < | 说明 |",
+      "| --- | --- | --- |",
+      "| 具体规定 | < | 内容 |",
+      "| ^ | ^ | 续内容 |",
+    ].join("\n"));
+
+    expect(parsed.grid[1][0].colspan).toBe(2);
+    expect(parsed.grid[2][0].hidden).toBe(true);
+    expect(parsed.grid[2][1].hidden).toBe(true);
+    expect(parsed.grid[1][0].rowspan).toBe(2);
+  });
+
   it("applies hidden vertical merge markers", () => {
     const parsed = parseAndMerge(`| A |\n| --- |\n| B |\n| <!-- sheet-extend:merge-up --> |`);
     expect(parsed.grid[1][0].rowspan).toBe(2);
