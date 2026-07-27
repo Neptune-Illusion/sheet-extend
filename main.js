@@ -1031,6 +1031,91 @@ function runUnmergeCommand(app, range, selection) {
   return true;
 }
 
+// src/sheet/live-preview.ts
+function addCellCoordinates(tableEl) {
+  const occupied = /* @__PURE__ */ new Map();
+  for (let rowIndex = 0; rowIndex < tableEl.rows.length; rowIndex++) {
+    const row = tableEl.rows[rowIndex];
+    let logicalCol = 0;
+    for (const cell of Array.from(row.cells)) {
+      while (occupied.has(`${rowIndex}:${logicalCol}`))
+        logicalCol++;
+      cell.setAttribute("data-row", String(rowIndex));
+      cell.setAttribute("data-col", String(logicalCol));
+      for (let r = 0; r < (cell.rowSpan || 1); r++) {
+        for (let c = 0; c < (cell.colSpan || 1); c++) {
+          occupied.set(`${rowIndex + r}:${logicalCol + c}`, true);
+        }
+      }
+      logicalCol += cell.colSpan || 1;
+    }
+  }
+}
+function flattenSections(tableEl) {
+  const thead = tableEl.tHead;
+  if (!thead || !tableEl.tBodies.length)
+    return;
+  const tbody = tableEl.tBodies[0];
+  tbody.prepend(...Array.from(thead.rows));
+  thead.remove();
+}
+function ensureLogicalColumns(tableEl, parsed) {
+  var _a, _b;
+  for (let rowIndex = 0; rowIndex < tableEl.rows.length; rowIndex++) {
+    const row = tableEl.rows[rowIndex];
+    const target = ((_a = parsed.grid[rowIndex]) == null ? void 0 : _a.length) || 0;
+    const current = Array.from(row.cells).reduce((sum, cell) => sum + (cell.colSpan || 1), 0);
+    const tag = ((_b = row.parentElement) == null ? void 0 : _b.tagName) === "THEAD" ? "th" : "td";
+    for (let col = current; col < target; col++)
+      row.appendChild(tableEl.ownerDocument.createElement(tag));
+  }
+}
+function applyLivePreviewMerge(tableEl, parsed) {
+  var _a;
+  const headerRows = ((_a = tableEl.tHead) == null ? void 0 : _a.rows.length) || 0;
+  const crossesSections = !!tableEl.tHead && tableEl.tBodies.length > 0 && parsed.grid.slice(0, headerRows || 1).some((row, index) => row.some((cell) => !cell.hidden && cell.rowspan > 1 && index + cell.rowspan > headerRows));
+  if (crossesSections)
+    flattenSections(tableEl);
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    cell.style.display = "";
+    cell.colSpan = 1;
+    cell.rowSpan = 1;
+  }
+  ensureLogicalColumns(tableEl, parsed);
+  addCellCoordinates(tableEl);
+  const cells = /* @__PURE__ */ new Map();
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    cells.set(`${cell.getAttribute("data-row")}:${cell.getAttribute("data-col")}`, cell);
+  }
+  for (let row = 0; row < parsed.grid.length; row++) {
+    for (let col = 0; col < parsed.grid[row].length; col++) {
+      const parsedCell = parsed.grid[row][col];
+      const domCell = cells.get(`${row}:${col}`);
+      if (!domCell)
+        continue;
+      if (parsedCell.hidden) {
+        domCell.style.display = "none";
+        domCell.textContent = "";
+      } else {
+        domCell.colSpan = parsedCell.colspan || 1;
+        domCell.rowSpan = parsedCell.rowspan || 1;
+      }
+    }
+  }
+  return crossesSections;
+}
+
+// src/sheet/source-view.ts
+function selectSourceView(active, leaves, sourcePath) {
+  var _a, _b;
+  if (!sourcePath || ((_a = active == null ? void 0 : active.file) == null ? void 0 : _a.path) === sourcePath)
+    return active || null;
+  return ((_b = leaves.find((leaf) => {
+    var _a2, _b2;
+    return ((_b2 = (_a2 = leaf.view) == null ? void 0 : _a2.file) == null ? void 0 : _b2.path) === sourcePath;
+  })) == null ? void 0 : _b.view) || null;
+}
+
 // main.ts
 function ensureColgroup(tableEl) {
   if (tableEl.querySelector("colgroup"))
@@ -1142,6 +1227,14 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       return null;
     return editor.getValue();
   }
+  getMarkdownViewForSourcePath(sourcePath) {
+    var _a, _b, _c;
+    const active = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    if (!sourcePath || ((_a = active == null ? void 0 : active.file) == null ? void 0 : _a.path) === sourcePath)
+      return active || null;
+    const leaves = ((_c = (_b = this.app.workspace).getLeavesOfType) == null ? void 0 : _c.call(_b, "markdown")) || [];
+    return selectSourceView(active, leaves, sourcePath);
+  }
   /**
    * Given the full document text, find the table block that contains
    * the approximate content matching the DOM table.
@@ -1149,7 +1242,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
    */
   findMergeTableInDocument(docText, tableEl, sourcePath) {
     var _a;
-    const hasSourceHint = tableEl.hasAttribute("data-line-start") || Number.isInteger(this.getSourceLineForTable(tableEl));
+    const hasSourceHint = tableEl.hasAttribute("data-line-start") || Number.isInteger(this.getSourceLineForTable(tableEl, sourcePath));
     if (!hasMergeMarkersInElement(tableEl) && !hasSourceHint) {
       return null;
     }
@@ -1188,8 +1281,8 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     }
     return null;
   }
-  getSourceLineForTable(tableEl) {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+  getSourceLineForTable(tableEl, sourcePath = "") {
+    const view = this.getMarkdownViewForSourcePath(sourcePath);
     const editor = view == null ? void 0 : view.editor;
     if (!(editor == null ? void 0 : editor.posAtDOM))
       return null;
@@ -1253,38 +1346,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     this.setupMergeInteraction(tableEl);
   }
   applyMergePreviewToExistingTable(tableEl, tableText) {
-    const parsed = parseAndMerge(tableText);
-    if (this.parsedTableHasRowspanAcrossDomSections(tableEl, parsed)) {
-      return;
-    }
-    const cellByPosition = /* @__PURE__ */ new Map();
-    for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-      cell.style.display = "";
-      cell.colSpan = 1;
-      cell.rowSpan = 1;
-    }
-    this.addCellCoordinates(tableEl);
-    for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-      const row = Number(cell.getAttribute("data-row"));
-      const col = Number(cell.getAttribute("data-col"));
-      if (!Number.isInteger(row) || !Number.isInteger(col))
-        continue;
-      cellByPosition.set(`${row}:${col}`, cell);
-    }
-    for (let row = 0; row < parsed.grid.length; row++) {
-      for (let col = 0; col < parsed.grid[row].length; col++) {
-        const parsedCell = parsed.grid[row][col];
-        const domCell = cellByPosition.get(`${row}:${col}`);
-        if (!domCell)
-          continue;
-        if (parsedCell.hidden) {
-          domCell.style.display = "none";
-        } else {
-          domCell.colSpan = parsedCell.colspan || 1;
-          domCell.rowSpan = parsedCell.rowspan || 1;
-        }
-      }
-    }
+    applyLivePreviewMerge(tableEl, parseAndMerge(tableText));
   }
   parsedTableHasRowspanAcrossDomSections(tableEl, parsed) {
     if (!tableEl.tHead || !tableEl.tBodies.length) {
@@ -1328,10 +1390,10 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       }
     }
     if (!sourceText) {
-      const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+      const view = this.getMarkdownViewForSourcePath(context.sourcePath || "");
       if (view && view.editor) {
         const fullDoc = view.editor.getValue();
-        const match = this.findTableInSource(fullDoc, tableEl) || this.findMergeTableInDocument(fullDoc, tableEl, context.sourcePath || "");
+        const match = this.findTableInSource(fullDoc, tableEl, context.sourcePath || "") || this.findMergeTableInDocument(fullDoc, tableEl, context.sourcePath || "");
         sourceText = (match == null ? void 0 : match.text) || "";
         range = (match == null ? void 0 : match.range) || null;
         tableOrdinal = match == null ? void 0 : match.tableOrdinal;
@@ -1391,10 +1453,11 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     }, tableEl);
   }
   getRangeForPlainTable(tableEl) {
+    var _a;
     const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
     if (!(view == null ? void 0 : view.editor))
       return null;
-    const match = this.findTableInSource(view.editor.getValue(), tableEl);
+    const match = this.findTableInSource(view.editor.getValue(), tableEl, ((_a = view.file) == null ? void 0 : _a.path) || "");
     return (match == null ? void 0 : match.range) || null;
   }
   runActiveMergeCommand(checking, direction) {
@@ -1468,18 +1531,15 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
    * Prefer unique content/body/header signatures over brittle
    * "header text appears in a line" matching.
    */
-  findTableInSource(fullDoc, tableEl) {
-    var _a, _b, _c, _d, _e;
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
-    const docVersion = (_e = (_d = (_c = (_b = (_a = view == null ? void 0 : view.editor) == null ? void 0 : _a.cm) == null ? void 0 : _b.state) == null ? void 0 : _c.doc) == null ? void 0 : _d.version) != null ? _e : -1;
+  findTableInSource(fullDoc, tableEl, sourcePath = "") {
     let tableSpecs;
-    if (this.specsCache && this.specsCache.version === docVersion) {
+    if (this.specsCache && this.specsCache.documentText === fullDoc) {
       tableSpecs = this.specsCache.specs;
     } else {
       tableSpecs = extractMarkdownTableSpecs(fullDoc);
-      this.specsCache = { version: docVersion, specs: tableSpecs };
+      this.specsCache = { documentText: fullDoc, specs: tableSpecs };
     }
-    const sourceLine = this.getSourceLineForTable(tableEl);
+    const sourceLine = this.getSourceLineForTable(tableEl, sourcePath);
     if (sourceLine !== null && Number.isInteger(sourceLine)) {
       const sourceLineMatch = tableSpecs.find(
         (spec) => sourceLine >= spec.range.startLine && sourceLine <= spec.range.endLine

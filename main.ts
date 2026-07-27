@@ -14,6 +14,8 @@ import { makeTableResizable } from "./src/resizer/resizer";
 import { getTableIds, saveWidths, loadWidths, applySavedWidths, DATA_VERSION } from "./src/resizer/persistence";
 import { installMergeInteraction, runMergeCommand, runUnmergeCommand } from "./src/merge/interaction";
 import { expandSelectionForDirection, expandSelectionForUnmerge, getTableBounds, selectionHasHorizontalSpan, selectionHasVerticalSpan, isTableLine } from "./src/sheet/utils";
+import { applyLivePreviewMerge } from "./src/sheet/live-preview";
+import { selectSourceView } from "./src/sheet/source-view";
 import type { CellSelection, TableRange } from "./src/sheet/writeback";
 
 interface TableMatch {
@@ -160,6 +162,13 @@ export default class SheetExtendPlugin extends Plugin {
     return editor.getValue();
   }
 
+  private getMarkdownViewForSourcePath(sourcePath: string): MarkdownView | null {
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!sourcePath || active?.file?.path === sourcePath) return active || null;
+    const leaves = this.app.workspace.getLeavesOfType?.("markdown") || [];
+    return selectSourceView<MarkdownView>(active, leaves as unknown as Array<{ view?: MarkdownView }>, sourcePath);
+  }
+
   /**
    * Given the full document text, find the table block that contains
    * the approximate content matching the DOM table.
@@ -172,7 +181,7 @@ export default class SheetExtendPlugin extends Plugin {
   ): TableMatch | null {
     const hasSourceHint =
       tableEl.hasAttribute("data-line-start") ||
-      Number.isInteger(this.getSourceLineForTable(tableEl));
+      Number.isInteger(this.getSourceLineForTable(tableEl, sourcePath));
     if (!hasMergeMarkersInElement(tableEl) && !hasSourceHint) {
       return null;
     }
@@ -222,8 +231,8 @@ export default class SheetExtendPlugin extends Plugin {
     return null;
   }
 
-  private getSourceLineForTable(tableEl: HTMLTableElement): number | null {
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+  private getSourceLineForTable(tableEl: HTMLTableElement, sourcePath = ""): number | null {
+    const view = this.getMarkdownViewForSourcePath(sourcePath);
     const editor = view?.editor as EditorLike | undefined;
     if (!editor?.posAtDOM) return null;
 
@@ -300,41 +309,7 @@ export default class SheetExtendPlugin extends Plugin {
   }
 
   private applyMergePreviewToExistingTable(tableEl: HTMLTableElement, tableText: string): void {
-    const parsed = parseAndMerge(tableText);
-    if (this.parsedTableHasRowspanAcrossDomSections(tableEl, parsed)) {
-      return;
-    }
-    const cellByPosition = new Map<string, HTMLTableCellElement>();
-
-    for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
-      cell.style.display = "";
-      cell.colSpan = 1;
-      cell.rowSpan = 1;
-    }
-
-    this.addCellCoordinates(tableEl);
-    for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
-      const row = Number(cell.getAttribute("data-row"));
-      const col = Number(cell.getAttribute("data-col"));
-      if (!Number.isInteger(row) || !Number.isInteger(col)) continue;
-
-      cellByPosition.set(`${row}:${col}`, cell);
-    }
-
-    for (let row = 0; row < parsed.grid.length; row++) {
-      for (let col = 0; col < parsed.grid[row].length; col++) {
-        const parsedCell = parsed.grid[row][col];
-        const domCell = cellByPosition.get(`${row}:${col}`);
-        if (!domCell) continue;
-
-        if (parsedCell.hidden) {
-          domCell.style.display = "none";
-        } else {
-          domCell.colSpan = parsedCell.colspan || 1;
-          domCell.rowSpan = parsedCell.rowspan || 1;
-        }
-      }
-    }
+    applyLivePreviewMerge(tableEl, parseAndMerge(tableText));
   }
 
   private parsedTableHasRowspanAcrossDomSections(
@@ -387,11 +362,11 @@ export default class SheetExtendPlugin extends Plugin {
     }
 
     if (!sourceText) {
-      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      const view = this.getMarkdownViewForSourcePath(context.sourcePath || "");
       if (view && view.editor) {
         const fullDoc = view.editor.getValue();
         const match =
-          this.findTableInSource(fullDoc, tableEl) ||
+          this.findTableInSource(fullDoc, tableEl, context.sourcePath || "") ||
           this.findMergeTableInDocument(fullDoc, tableEl, context.sourcePath || "");
         sourceText = match?.text || "";
         range = match?.range || null;
@@ -467,7 +442,7 @@ export default class SheetExtendPlugin extends Plugin {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view?.editor) return null;
 
-    const match = this.findTableInSource(view.editor.getValue(), tableEl);
+    const match = this.findTableInSource(view.editor.getValue(), tableEl, view.file?.path || "");
     return match?.range || null;
   }
 
@@ -547,25 +522,23 @@ export default class SheetExtendPlugin extends Plugin {
     return true;
   }
 
-  private specsCache: { version: number; specs: ReturnType<typeof extractMarkdownTableSpecs> } | null = null;
+  private specsCache: { documentText: string; specs: ReturnType<typeof extractMarkdownTableSpecs> } | null = null;
 
   /**
    * Locate the raw markdown table block corresponding to a rendered table.
    * Prefer unique content/body/header signatures over brittle
    * "header text appears in a line" matching.
    */
-  private findTableInSource(fullDoc: string, tableEl: HTMLTableElement): { text: string; range: TableRange; tableOrdinal?: number } | null {
+  private findTableInSource(fullDoc: string, tableEl: HTMLTableElement, sourcePath = ""): { text: string; range: TableRange; tableOrdinal?: number } | null {
     // ponytail: cache specs per CM6 doc version to avoid full-document scan on every keystroke
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-    const docVersion = (view?.editor as any)?.cm?.state?.doc?.version ?? -1;
     let tableSpecs: ReturnType<typeof extractMarkdownTableSpecs>;
-    if (this.specsCache && this.specsCache.version === docVersion) {
+    if (this.specsCache && this.specsCache.documentText === fullDoc) {
       tableSpecs = this.specsCache.specs;
     } else {
       tableSpecs = extractMarkdownTableSpecs(fullDoc);
-      this.specsCache = { version: docVersion, specs: tableSpecs };
+      this.specsCache = { documentText: fullDoc, specs: tableSpecs };
     }
-    const sourceLine = this.getSourceLineForTable(tableEl);
+    const sourceLine = this.getSourceLineForTable(tableEl, sourcePath);
     if (sourceLine !== null && Number.isInteger(sourceLine)) {
       const sourceLineMatch = tableSpecs.find(
         (spec) => sourceLine >= spec.range.startLine && sourceLine <= spec.range.endLine
