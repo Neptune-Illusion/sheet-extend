@@ -100,6 +100,7 @@ export function applyMerges(grid: Cell[][]): void {
         const anchor = findAnchor(grid, r, c - 1, "horizontal");
         if (anchor && canExpand(grid, anchor, r, c, "horizontal")) {
           anchor.cell.colspan = Math.max(anchor.cell.colspan || 1, c - anchor.col + 1);
+          hideCoveredCells(grid, anchor, r, c, "horizontal");
           cell.hidden = true;
         }
       } else if (isMergeUpMarker(cell.text) && r > 0) {
@@ -112,6 +113,7 @@ export function applyMerges(grid: Cell[][]): void {
             anchor.cell.rowspan = (anchor.cell.rowspan || 1) + 1;
             extendedVertically.add(anchor.cell);
           }
+          hideCoveredCells(grid, anchor, r, c, "vertical");
           cell.hidden = true;
         }
       }
@@ -155,12 +157,35 @@ function canExpand(
     for (let col = anchor.col; col <= colEnd; col++) {
       if (row === anchor.row && col === anchor.col) continue;
       const occupant = grid[row]?.[col];
-      if (!occupant || occupant.hidden || isMergeMarkerCell(occupant.text)) continue;
+      if (
+        !occupant ||
+        occupant.hidden ||
+        isMergeMarkerCell(occupant.text) ||
+        occupant.text.trim() === ""
+      ) continue;
       if (row < anchor.row + (anchor.cell.rowspan || 1) && col < anchor.col + (anchor.cell.colspan || 1)) continue;
       return false;
     }
   }
   return true;
+}
+
+function hideCoveredCells(
+  grid: Cell[][],
+  anchor: { cell: Cell; row: number; col: number },
+  targetRow: number,
+  targetCol: number,
+  direction: "horizontal" | "vertical"
+): void {
+  const rowEnd = direction === "vertical" ? targetRow : anchor.row + (anchor.cell.rowspan || 1) - 1;
+  const colEnd = direction === "horizontal" ? targetCol : anchor.col + (anchor.cell.colspan || 1) - 1;
+  for (let row = anchor.row; row <= rowEnd; row++) {
+    for (let col = anchor.col; col <= colEnd; col++) {
+      const occupant = grid[row]?.[col];
+      if (!occupant || occupant === anchor.cell) continue;
+      if (occupant.text.trim() === "" || isMergeMarkerCell(occupant.text)) occupant.hidden = true;
+    }
+  }
 }
 
 export function stripMergeMarkers(grid: Cell[][]): void {
