@@ -160,8 +160,7 @@ function canExpand(
       if (
         !occupant ||
         occupant.hidden ||
-        isMergeMarkerCell(occupant.text) ||
-        occupant.text.trim() === ""
+        isMergeMarkerCell(occupant.text)
       ) continue;
       if (row < anchor.row + (anchor.cell.rowspan || 1) && col < anchor.col + (anchor.cell.colspan || 1)) continue;
       return false;

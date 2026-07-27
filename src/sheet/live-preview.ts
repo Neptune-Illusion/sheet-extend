@@ -1,4 +1,5 @@
 import type { ParsedTable } from "./parser";
+import { isMergeMarkerCell } from "./detect";
 
 function addCellCoordinates(tableEl: HTMLTableElement): void {
   const occupied = new Map<string, true>();
@@ -73,6 +74,12 @@ export function applyLivePreviewMerge(tableEl: HTMLTableElement, parsed: ParsedT
       } else {
         domCell.colSpan = parsedCell.colspan || 1;
         domCell.rowSpan = parsedCell.rowspan || 1;
+        // A marker can be intentionally rejected when it would create an
+        // incomplete rectangle. Keep its empty cell in the native table so
+        // column geometry remains stable, but remove Obsidian's raw marker.
+        if (parsedCell.text === "" && isMergeMarkerCell(domCell.textContent || "")) {
+          domCell.textContent = "";
+        }
       }
     }
   }

@@ -55,4 +55,19 @@ describe("Live Preview native table integration", () => {
     expect(table.rows[0].cells[1].style.display).toBe("none");
     expect(table.textContent).not.toContain("<");
   });
+
+  it("clears rejected partial rectangle markers without removing their cells", () => {
+    const table = nativeTable(
+      "<thead><tr><th></th><th>&lt;</th><th></th></tr></thead>" +
+      "<tbody><tr><td></td><td>^</td><td></td></tr></tbody>"
+    );
+    const parsed = parseAndMerge("| | < | |\n| --- | --- | --- |\n| | ^ | |");
+
+    applyLivePreviewMerge(table, parsed);
+    expect(table.rows[0].cells[0].colSpan).toBe(2);
+    expect(table.rows[0].cells[0].rowSpan).toBe(1);
+    expect(table.rows[1].cells[1].style.display).not.toBe("none");
+    expect(table.rows[1].cells[1].textContent).toBe("");
+    expect(table.textContent).not.toContain("^");
+  });
 });

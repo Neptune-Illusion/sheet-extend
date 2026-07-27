@@ -100,25 +100,31 @@ describe("parseAndMerge", () => {
     expect(parsed.grid[1][0].colspan).toBe(2);
   });
 
-  it("merges blank cells under a horizontal anchor from the real Untitled fixture", () => {
+  it("does not absorb blank cells into an incomplete rectangle from the real Untitled fixture", () => {
     const parsed = parseAndMerge([
-      "| | < | |",
-      "| --- | --- | --- |",
-      "| | ^ | |",
-      "| | ^ | |",
-      "| | < | |",
-      "| ^ | | |",
-      "| | < | |",
-      "| | | < |",
+      "| | < | | |",
+      "| --- | --- | --- | --- |",
+      "| | ^ | | |",
+      "| | ^ | | |",
+      "| | < | | |",
+      "| ^ | | | |",
+      "| | < | | |",
+      "| | | < | < |",
     ].join("\n"));
 
     expect(parsed.grid[0][0].colspan).toBe(2);
-    expect(parsed.grid[0][0].rowspan).toBe(3);
-    expect(parsed.grid[1][1].hidden).toBe(true);
-    expect(parsed.grid[1][0].hidden).toBe(true);
-    expect(parsed.grid[2][0].hidden).toBe(true);
-    expect(parsed.grid[4][0].hidden).toBe(true);
+    expect(parsed.grid[0][0].rowspan).toBe(1);
+    expect(parsed.grid[1][1].hidden).toBe(false);
+    expect(parsed.grid[1][1].text).toBe("");
+    expect(parsed.grid[1][0].hidden).toBe(false);
+    expect(parsed.grid[2][0].hidden).toBe(false);
+    expect(parsed.grid[4][0].hidden).toBe(false);
+    expect(parsed.grid[4][0].text).toBe("");
+    expect(parsed.grid[3][0].colspan).toBe(2);
+    expect(parsed.grid[5][0].colspan).toBe(2);
+    expect(parsed.grid[6][1].colspan).toBe(3);
     expect(parsed.grid[6][2].hidden).toBe(true);
+    expect(parsed.grid[6][3].hidden).toBe(true);
   });
 
   it("applies hidden vertical merge markers", () => {

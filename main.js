@@ -249,7 +249,7 @@ function canExpand(grid, anchor, targetRow, targetCol, direction) {
       if (row === anchor.row && col === anchor.col)
         continue;
       const occupant = (_a = grid[row]) == null ? void 0 : _a[col];
-      if (!occupant || occupant.hidden || isMergeMarkerCell(occupant.text) || occupant.text.trim() === "")
+      if (!occupant || occupant.hidden || isMergeMarkerCell(occupant.text))
         continue;
       if (row < anchor.row + (anchor.cell.rowspan || 1) && col < anchor.col + (anchor.cell.colspan || 1))
         continue;
@@ -1143,6 +1143,9 @@ function applyLivePreviewMerge(tableEl, parsed) {
       } else {
         domCell.colSpan = parsedCell.colspan || 1;
         domCell.rowSpan = parsedCell.rowspan || 1;
+        if (parsedCell.text === "" && isMergeMarkerCell(domCell.textContent || "")) {
+          domCell.textContent = "";
+        }
       }
     }
   }
