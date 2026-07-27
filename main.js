@@ -203,36 +203,58 @@ function applyMerges(grid) {
       if (cell.hidden)
         continue;
       if (isMergeLeftMarker(cell.text) && c > 0) {
-        for (let pc = c - 1; pc >= 0; pc--) {
-          const prev = grid[r][pc];
-          if (!prev.hidden) {
-            prev.colspan = (prev.colspan || 1) + 1;
-            cell.hidden = true;
-            break;
-          }
+        const anchor = findAnchor(grid, r, c - 1, "horizontal");
+        if (anchor && canExpand(grid, anchor, r, c, "horizontal")) {
+          anchor.cell.colspan = Math.max(anchor.cell.colspan || 1, c - anchor.col + 1);
+          cell.hidden = true;
         }
       } else if (isMergeUpMarker(cell.text) && r > 0) {
-        for (let pr = r - 1; pr >= 0; pr--) {
-          let anchor = null;
-          for (let pc = 0; pc < grid[pr].length; pc++) {
-            const prev = grid[pr][pc];
-            if (!prev.hidden && c >= pc && c < pc + (prev.colspan || 1) && pr + (prev.rowspan || 1) >= r) {
-              anchor = prev;
-              break;
-            }
+        const anchor = findAnchor(grid, r, c, "vertical");
+        if (anchor && canExpand(grid, anchor, r, c, "vertical")) {
+          if (!extendedVertically.has(anchor.cell)) {
+            anchor.cell.rowspan = (anchor.cell.rowspan || 1) + 1;
+            extendedVertically.add(anchor.cell);
           }
-          if (anchor) {
-            if (!extendedVertically.has(anchor)) {
-              anchor.rowspan = (anchor.rowspan || 1) + 1;
-              extendedVertically.add(anchor);
-            }
-            cell.hidden = true;
-            break;
-          }
+          cell.hidden = true;
         }
       }
     }
   }
+}
+function findAnchor(grid, row, col, direction) {
+  for (let r = row; r >= 0; r--) {
+    for (let c = 0; c < grid[r].length; c++) {
+      const candidate = grid[r][c];
+      if (candidate.hidden)
+        continue;
+      const coversRow = direction === "vertical" ? r < row && r + (candidate.rowspan || 1) >= row : r <= row && row < r + (candidate.rowspan || 1);
+      const coversCol = c <= col && col < c + (candidate.colspan || 1);
+      if (!coversRow || !coversCol)
+        continue;
+      if (direction === "vertical" && r === row)
+        continue;
+      return { cell: candidate, row: r, col: c };
+    }
+  }
+  return null;
+}
+function canExpand(grid, anchor, targetRow, targetCol, direction) {
+  var _a;
+  const rowEnd = direction === "vertical" ? targetRow : anchor.row + (anchor.cell.rowspan || 1) - 1;
+  const colEnd = direction === "horizontal" ? targetCol : anchor.col + (anchor.cell.colspan || 1) - 1;
+  for (let row = anchor.row; row <= rowEnd; row++) {
+    for (let col = anchor.col; col <= colEnd; col++) {
+      if (row === anchor.row && col === anchor.col)
+        continue;
+      const occupant = (_a = grid[row]) == null ? void 0 : _a[col];
+      if (!occupant || occupant.hidden || isMergeMarkerCell(occupant.text))
+        continue;
+      if (row < anchor.row + (anchor.cell.rowspan || 1) && col < anchor.col + (anchor.cell.colspan || 1))
+        continue;
+      return false;
+    }
+  }
+  return true;
 }
 function stripMergeMarkers(grid) {
   for (const row of grid) {

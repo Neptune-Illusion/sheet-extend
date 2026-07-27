@@ -82,6 +82,24 @@ describe("parseAndMerge", () => {
     expect(parsed.grid[1][0].rowspan).toBe(2);
   });
 
+  it("handles an L-shaped sequence of horizontal and vertical markers", () => {
+    const parsed = parseAndMerge([
+      "| A | B | C |",
+      "| --- | --- | --- |",
+      "| root | < | C |",
+      "| ^ | ^ | < |",
+    ].join("\n"));
+
+    expect(parsed.grid[1][0].colspan).toBe(2);
+    expect(parsed.grid[1][0].rowspan).toBe(2);
+    expect(parsed.grid[2][0].hidden).toBe(true);
+    expect(parsed.grid[2][1].hidden).toBe(true);
+    // The final < cannot expand the rectangle into the visible C cell above;
+    // rejecting it prevents an overlapping HTML table span.
+    expect(parsed.grid[2][2].hidden).toBe(false);
+    expect(parsed.grid[1][0].colspan).toBe(2);
+  });
+
   it("applies hidden vertical merge markers", () => {
     const parsed = parseAndMerge(`| A |\n| --- |\n| B |\n| <!-- sheet-extend:merge-up --> |`);
     expect(parsed.grid[1][0].rowspan).toBe(2);
