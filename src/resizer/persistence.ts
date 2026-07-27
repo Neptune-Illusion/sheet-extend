@@ -1,5 +1,7 @@
 import { Plugin } from "obsidian";
 
+export const DATA_VERSION = "1.5.0";
+
 export function getTableId(tableEl: HTMLTableElement): string {
   return getTableIds(tableEl)[0];
 }
@@ -17,9 +19,10 @@ export function getTableIds(tableEl: HTMLTableElement): string[] {
     ids.push(`table-${sourcePath}-ordinal-${ordinal}`);
   }
 
-  const text = tableEl.textContent || "";
-  const hash = text.slice(0, 100).replace(/\s+/g, " ").trim();
-  ids.push(`table-fallback-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`);
+  // ponytail: stable fallback; skip textContent hash to avoid losing widths on cell edits
+  if (sourcePath && Number.isInteger(Number(ordinal))) {
+    ids.push(`table-${sourcePath}-ordinal-${ordinal}-fallback`);
+  }
 
   return Array.from(new Set(ids));
 }
@@ -45,7 +48,7 @@ export function saveWidths(
   }
   (plugin as any).widthStore = store;
   plugin.saveData({
-    version: "1.3.0",
+    version: DATA_VERSION,
     settings: (plugin as any).settings,
     columnWidths: store,
   });

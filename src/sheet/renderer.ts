@@ -27,7 +27,7 @@ export function renderTable(
   const { grid, alignments } = parsed;
 
   tableEl.empty();
-  tableEl.id = "sheet-extend-parsed";
+  tableEl.classList.add("sheet-extend-parsed");
   tableEl.removeAttribute("data-resizable");
 
   if (grid.length === 0) return;

@@ -1,4 +1,5 @@
 import { isMergeMarkerCell } from "./detect";
+import { getLineEnding, splitLines, isTableLine, normalizeSelection } from "./utils";
 
 export interface TableRange {
   startLine: number;
@@ -26,33 +27,6 @@ interface ParsedLine {
   cells: string[];
   hasLeadingPipe: boolean;
   hasTrailingPipe: boolean;
-}
-
-function getLineEnding(text: string): "\r\n" | "\n" {
-  return text.includes("\r\n") ? "\r\n" : "\n";
-}
-
-function splitLines(text: string): string[] {
-  return text.split(/\r?\n/);
-}
-
-function normalizeSelection(selection: CellSelection): {
-  rowStart: number;
-  rowEnd: number;
-  colStart: number;
-  colEnd: number;
-} {
-  return {
-    rowStart: Math.min(selection.anchor.row, selection.focus.row),
-    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
-    colStart: Math.min(selection.anchor.col, selection.focus.col),
-    colEnd: Math.max(selection.anchor.col, selection.focus.col),
-  };
-}
-
-function isTableLine(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
 }
 
 function isDelimiterCell(cell: string): boolean {

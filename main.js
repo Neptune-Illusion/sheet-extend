@@ -36,8 +36,7 @@ var DEFAULT_SETTINGS = {
   defaultWidth: 150,
   nativeProcessing: true,
   widthPersistence: "plugin",
-  pixelsPerDash: 8,
-  enableFormulas: true
+  pixelsPerDash: 8
 };
 var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -54,7 +53,7 @@ var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "sheet extend settings" });
+    containerEl.createEl("h2", { text: "Sheet Extend Settings" });
     new import_obsidian.Setting(containerEl).setName("Minimum column width").setDesc("Minimum width for a resized column (px)").addSlider(
       (slider) => slider.setLimits(30, 100, 5).setValue(this.settings.minWidth).onChange(async (value) => {
         await this.updateSettings({ minWidth: value });
@@ -83,11 +82,6 @@ var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("Pixels per separator dash").setDesc("Used when storing column widths in Markdown").addSlider(
       (slider) => slider.setLimits(4, 20, 1).setValue(this.settings.pixelsPerDash).onChange(async (value) => {
         await this.updateSettings({ pixelsPerDash: value });
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Enable table formulas").setDesc("Render =sum, =avg, =count, =max, and =min in enhanced tables").addToggle(
-      (toggle) => toggle.setValue(this.settings.enableFormulas).onChange(async (value) => {
-        await this.updateSettings({ enableFormulas: value });
       })
     );
   }
@@ -263,7 +257,7 @@ function hasRowspanAcrossBoundary(grid, headerCount) {
 function renderTable(app, tableEl, parsed, sourcePath, component) {
   const { grid, alignments } = parsed;
   tableEl.empty();
-  tableEl.id = "sheet-extend-parsed";
+  tableEl.classList.add("sheet-extend-parsed");
   tableEl.removeAttribute("data-resizable");
   if (grid.length === 0)
     return;
@@ -351,79 +345,90 @@ function renderTable(app, tableEl, parsed, sourcePath, component) {
   }
 }
 
-// src/sheet/formulas.ts
-function parseFormula(text) {
-  const match = text.trim().toLowerCase().match(/^=(sum|avg|count|max|min)$/);
-  return match ? match[1] : null;
+// src/sheet/utils.ts
+function getLineEnding(text) {
+  return text.includes("\r\n") ? "\r\n" : "\n";
 }
-function parseNumber(text) {
-  const normalized = text.replace(/,/g, "").trim();
-  if (!normalized)
-    return null;
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
+function splitLines(text) {
+  return text.split(/\r?\n/);
 }
-function formatNumber(value) {
-  if (Number.isInteger(value))
-    return String(value);
-  return String(Number(value.toFixed(4)));
+var isTableLine = (line) => {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
+};
+function normalizeSelection(selection) {
+  return {
+    rowStart: Math.min(selection.anchor.row, selection.focus.row),
+    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
+    colStart: Math.min(selection.anchor.col, selection.focus.col),
+    colEnd: Math.max(selection.anchor.col, selection.focus.col)
+  };
 }
-function calculateFormula(name, values) {
-  if (name === "count")
-    return String(values.length);
-  if (!values.length)
-    return "";
-  if (name === "sum")
-    return formatNumber(values.reduce((sum, value) => sum + value, 0));
-  if (name === "avg")
-    return formatNumber(values.reduce((sum, value) => sum + value, 0) / values.length);
-  if (name === "max")
-    return formatNumber(Math.max(...values));
-  return formatNumber(Math.min(...values));
+function selectionHasHorizontalSpan(selection) {
+  const bounds = normalizeSelection(selection);
+  return bounds.colEnd > bounds.colStart;
 }
-function applyFormulas(parsed) {
-  var _a;
-  const grid = parsed.grid.map((row) => row.map((cell) => ({ ...cell })));
-  const originalGrid = parsed.grid;
-  for (let row = 1; row < grid.length; row++) {
-    for (let col = 0; col < grid[row].length; col++) {
-      const cell = grid[row][col];
-      if (cell.hidden)
-        continue;
-      const formula = parseFormula(cell.text);
-      if (!formula)
-        continue;
-      const values = [];
-      for (let sourceRow = 1; sourceRow < row; sourceRow++) {
-        const sourceCell = (_a = originalGrid[sourceRow]) == null ? void 0 : _a[col];
-        if (!sourceCell || sourceCell.hidden)
-          continue;
-        if (parseFormula(sourceCell.text))
-          continue;
-        const value = parseNumber(sourceCell.text);
-        if (value !== null)
-          values.push(value);
-      }
-      cell.text = calculateFormula(formula, values);
-    }
+function selectionHasVerticalSpan(selection) {
+  const bounds = normalizeSelection(selection);
+  return bounds.rowEnd > bounds.rowStart;
+}
+function getTableBounds(tableEl) {
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    const row = Number(cell.getAttribute("data-row"));
+    const col = Number(cell.getAttribute("data-col"));
+    if (Number.isInteger(row))
+      maxRow = Math.max(maxRow, row);
+    if (Number.isInteger(col))
+      maxCol = Math.max(maxCol, col + (cell.colSpan || 1) - 1);
+  }
+  return { maxRow, maxCol };
+}
+function expandSelectionForDirection(tableEl, selection, direction) {
+  if (direction === "horizontal" && selectionHasHorizontalSpan(selection))
+    return selection;
+  if (direction === "vertical" && selectionHasVerticalSpan(selection))
+    return selection;
+  const { maxRow, maxCol } = getTableBounds(tableEl);
+  if (direction === "horizontal" && selection.focus.col < maxCol) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
+  }
+  if (direction === "vertical" && selection.focus.row < maxRow) {
+    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
+  }
+  return null;
+}
+function expandSelectionForUnmerge(tableEl, selection) {
+  const bounds = {
+    rowStart: Math.min(selection.anchor.row, selection.focus.row),
+    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
+    colStart: Math.min(selection.anchor.col, selection.focus.col),
+    colEnd: Math.max(selection.anchor.col, selection.focus.col)
+  };
+  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
+    const row = Number(cell.getAttribute("data-row"));
+    const col = Number(cell.getAttribute("data-col"));
+    if (!Number.isInteger(row) || !Number.isInteger(col))
+      continue;
+    const rowEnd = row + (cell.rowSpan || 1) - 1;
+    const colEnd = col + (cell.colSpan || 1) - 1;
+    if (!(row <= bounds.rowEnd && rowEnd >= bounds.rowStart && col <= bounds.colEnd && colEnd >= bounds.colStart))
+      continue;
+    bounds.rowStart = Math.min(bounds.rowStart, row);
+    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
+    bounds.colStart = Math.min(bounds.colStart, col);
+    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
   }
   return {
-    ...parsed,
-    grid
+    anchor: { row: bounds.rowStart, col: bounds.colStart },
+    focus: { row: bounds.rowEnd, col: bounds.colEnd }
   };
 }
 
 // src/sheet/markdown-table.ts
-function getLineEnding(text) {
-  return text.includes("\r\n") ? "\r\n" : "\n";
-}
-function splitMarkdownLines(text) {
-  return text.split(/\r?\n/);
-}
-function isMarkdownTableLine(line) {
-  const trimmed = line.trim();
-  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
-}
+var splitMarkdownLines = splitLines;
+var isMarkdownTableLine = isTableLine;
 function splitMarkdownRow(line) {
   if (!line.includes("|"))
     return [];
@@ -649,7 +654,15 @@ function makeTableResizable(plugin, tableEl, callbacks) {
       (_a2 = resizeCallbacks.onResizeStart) == null ? void 0 : _a2.call(resizeCallbacks);
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
+      window.addEventListener("blur", onBlur);
     });
+    const onBlur = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onBlur);
+      tableEl.removeAttribute("data-resizing");
+      document.body.classList.remove("sheet-extend-resizing");
+    };
     const onMouseMove = (e) => {
       const diff = e.clientX - startX;
       const newWidth = Math.max(
@@ -663,6 +676,7 @@ function makeTableResizable(plugin, tableEl, callbacks) {
     const onMouseUp = () => {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onBlur);
       tableEl.removeAttribute("data-resizing");
       document.body.classList.remove("sheet-extend-resizing");
       const widths = cols.map(
@@ -674,6 +688,7 @@ function makeTableResizable(plugin, tableEl, callbacks) {
 }
 
 // src/resizer/persistence.ts
+var DATA_VERSION = "1.5.0";
 function getTableIds(tableEl) {
   const sourcePath = tableEl.getAttribute("data-source-path");
   const lineStart = tableEl.getAttribute("data-line-start");
@@ -685,9 +700,9 @@ function getTableIds(tableEl) {
   if (sourcePath && ordinal) {
     ids.push(`table-${sourcePath}-ordinal-${ordinal}`);
   }
-  const text = tableEl.textContent || "";
-  const hash = text.slice(0, 100).replace(/\s+/g, " ").trim();
-  ids.push(`table-fallback-${hash.slice(0, 50).replace(/[^a-zA-Z0-9]/g, "_")}`);
+  if (sourcePath && Number.isInteger(Number(ordinal))) {
+    ids.push(`table-${sourcePath}-ordinal-${ordinal}-fallback`);
+  }
   return Array.from(new Set(ids));
 }
 function saveWidths(plugin, tableId, widths) {
@@ -703,7 +718,7 @@ function saveWidths(plugin, tableId, widths) {
   }
   plugin.widthStore = store;
   plugin.saveData({
-    version: "1.3.0",
+    version: DATA_VERSION,
     settings: plugin.settings,
     columnWidths: store
   });
@@ -735,20 +750,6 @@ function applySavedWidths(tableEl, widths) {
 var import_obsidian3 = require("obsidian");
 
 // src/sheet/writeback.ts
-function getLineEnding2(text) {
-  return text.includes("\r\n") ? "\r\n" : "\n";
-}
-function splitLines(text) {
-  return text.split(/\r?\n/);
-}
-function normalizeSelection(selection) {
-  return {
-    rowStart: Math.min(selection.anchor.row, selection.focus.row),
-    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
-    colStart: Math.min(selection.anchor.col, selection.focus.col),
-    colEnd: Math.max(selection.anchor.col, selection.focus.col)
-  };
-}
 function isDelimiterCell(cell) {
   return /^:?-{3,}:?$/.test(cell.trim());
 }
@@ -797,7 +798,7 @@ var HIDDEN_MERGE_LEFT = "<!-- sheet-extend:merge-left -->";
 var HIDDEN_MERGE_UP = "<!-- sheet-extend:merge-up -->";
 function applyMergeMarkers(tableText, selection, direction) {
   const lines = splitLines(tableText);
-  const lineEnding = getLineEnding2(tableText);
+  const lineEnding = getLineEnding(tableText);
   const { parsed, delimiterIndex } = parseTableLines(lines);
   const normalized = normalizeSelection(selection);
   if (normalized.rowStart === normalized.rowEnd && normalized.colStart === normalized.colEnd) {
@@ -829,7 +830,7 @@ function applyMergeMarkers(tableText, selection, direction) {
 }
 function clearMergeMarkers(tableText, selection) {
   const lines = splitLines(tableText);
-  const lineEnding = getLineEnding2(tableText);
+  const lineEnding = getLineEnding(tableText);
   const { parsed, delimiterIndex } = parseTableLines(lines);
   const normalized = normalizeSelection(selection);
   for (let row = normalized.rowStart; row <= normalized.rowEnd; row++) {
@@ -847,12 +848,12 @@ function clearMergeMarkers(tableText, selection) {
 }
 function replaceTableRange(documentText, range, tableText) {
   const lines = splitLines(documentText);
-  const lineEnding = getLineEnding2(documentText);
+  const lineEnding = getLineEnding(documentText);
   lines.splice(range.startLine, range.endLine - range.startLine + 1, ...splitLines(tableText));
   return lines.join(lineEnding);
 }
 function applyMergeToDocument(documentText, range, selection, direction) {
-  const lineEnding = getLineEnding2(documentText);
+  const lineEnding = getLineEnding(documentText);
   const tableText = splitLines(documentText).slice(range.startLine, range.endLine + 1).join(lineEnding);
   const nextTableText = applyMergeMarkers(tableText, selection, direction);
   return {
@@ -861,7 +862,7 @@ function applyMergeToDocument(documentText, range, selection, direction) {
   };
 }
 function clearMergeInDocument(documentText, range, selection) {
-  const lineEnding = getLineEnding2(documentText);
+  const lineEnding = getLineEnding(documentText);
   const tableText = splitLines(documentText).slice(range.startLine, range.endLine + 1).join(lineEnding);
   const nextTableText = clearMergeMarkers(tableText, selection);
   return {
@@ -881,76 +882,25 @@ function getCellPosition(cell) {
     return null;
   return { row, col };
 }
-function normalizeSelection2(selection) {
-  return {
-    rowStart: Math.min(selection.anchor.row, selection.focus.row),
-    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
-    colStart: Math.min(selection.anchor.col, selection.focus.col),
-    colEnd: Math.max(selection.anchor.col, selection.focus.col)
-  };
-}
 function containsPosition(selection, position) {
-  const bounds = normalizeSelection2(selection);
+  const bounds = normalizeSelection(selection);
   return position.row >= bounds.rowStart && position.row <= bounds.rowEnd && position.col >= bounds.colStart && position.col <= bounds.colEnd;
-}
-function selectionHasHorizontalSpan(selection) {
-  const bounds = normalizeSelection2(selection);
-  return bounds.colEnd > bounds.colStart;
-}
-function selectionHasVerticalSpan(selection) {
-  const bounds = normalizeSelection2(selection);
-  return bounds.rowEnd > bounds.rowStart;
-}
-function getTableBounds(tableEl) {
-  let maxRow = 0;
-  let maxCol = 0;
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-    const position = getCellPosition(cell);
-    if (!position)
-      continue;
-    maxRow = Math.max(maxRow, position.row);
-    maxCol = Math.max(maxCol, position.col + (cell.colSpan || 1) - 1);
-  }
-  return { maxRow, maxCol };
-}
-function expandSelectionForDirection(tableEl, selection, direction) {
-  if (direction === "horizontal" && selectionHasHorizontalSpan(selection))
-    return selection;
-  if (direction === "vertical" && selectionHasVerticalSpan(selection))
-    return selection;
-  const bounds = getTableBounds(tableEl);
-  if (direction === "horizontal" && selection.focus.col < bounds.maxCol) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
-  }
-  if (direction === "vertical" && selection.focus.row < bounds.maxRow) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
-  }
-  return null;
-}
-function expandSelectionForUnmerge(tableEl, selection) {
-  const bounds = normalizeSelection2(selection);
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-    const position = getCellPosition(cell);
-    if (!position)
-      continue;
-    const rowEnd = position.row + (cell.rowSpan || 1) - 1;
-    const colEnd = position.col + (cell.colSpan || 1) - 1;
-    const intersects = position.row <= bounds.rowEnd && rowEnd >= bounds.rowStart && position.col <= bounds.colEnd && colEnd >= bounds.colStart;
-    if (!intersects)
-      continue;
-    bounds.rowStart = Math.min(bounds.rowStart, position.row);
-    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
-    bounds.colStart = Math.min(bounds.colStart, position.col);
-    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
-  }
-  return {
-    anchor: { row: bounds.rowStart, col: bounds.colStart },
-    focus: { row: bounds.rowEnd, col: bounds.colEnd }
-  };
 }
 function getEditor(app) {
   const view = app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
   return (view == null ? void 0 : view.editor) || null;
+}
+function replaceTableInEditor(editor, range, oldDoc, newDoc) {
+  var _a, _b;
+  const oldLines = oldDoc.split("\n");
+  const newLines = newDoc.split("\n");
+  const newTableText = newLines.slice(range.startLine, range.endLine + 1).join("\n");
+  editor.replaceRange(
+    newTableText,
+    { line: range.startLine, ch: 0 },
+    { line: range.endLine, ch: (_b = (_a = oldLines[range.endLine]) == null ? void 0 : _a.length) != null ? _b : 0 }
+  );
+  editor.setCursor({ line: range.startLine, ch: 0 });
 }
 var MergeInteraction = class {
   constructor(host, tableEl) {
@@ -1050,9 +1000,9 @@ var MergeInteraction = class {
     const range = this.host.getTableRange(this.tableEl);
     if (!editor || !range)
       return;
-    const nextText = getNextDocument(editor.getValue(), range, this.selection);
-    editor.setValue(nextText);
-    editor.setCursor({ line: range.startLine, ch: 0 });
+    const oldDoc = editor.getValue();
+    const newDoc = getNextDocument(oldDoc, range, this.selection);
+    replaceTableInEditor(editor, range, oldDoc, newDoc);
     (_b = (_a = this.host).onDocumentChanged) == null ? void 0 : _b.call(_a);
   }
 };
@@ -1066,16 +1016,18 @@ function runMergeCommand(app, direction, range, selection) {
   const editor = getEditor(app);
   if (!editor || !range || !selection)
     return false;
-  editor.setValue(applyMergeToDocument(editor.getValue(), range, selection, direction).text);
-  editor.setCursor({ line: range.startLine, ch: 0 });
+  const oldDoc = editor.getValue();
+  const newDoc = applyMergeToDocument(oldDoc, range, selection, direction).text;
+  replaceTableInEditor(editor, range, oldDoc, newDoc);
   return true;
 }
 function runUnmergeCommand(app, range, selection) {
   const editor = getEditor(app);
   if (!editor || !range || !selection)
     return false;
-  editor.setValue(clearMergeInDocument(editor.getValue(), range, selection).text);
-  editor.setCursor({ line: range.startLine, ch: 0 });
+  const oldDoc = editor.getValue();
+  const newDoc = clearMergeInDocument(oldDoc, range, selection).text;
+  replaceTableInEditor(editor, range, oldDoc, newDoc);
   return true;
 }
 
@@ -1106,66 +1058,6 @@ function getLogicalColumnCount(tableEl) {
 function isSourceModeTable2(tableEl) {
   return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
 }
-function selectionHasHorizontalSpan2(selection) {
-  return Math.abs(selection.anchor.col - selection.focus.col) > 0;
-}
-function selectionHasVerticalSpan2(selection) {
-  return Math.abs(selection.anchor.row - selection.focus.row) > 0;
-}
-function getTableBounds2(tableEl) {
-  let maxRow = 0;
-  let maxCol = 0;
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-    const row = Number(cell.getAttribute("data-row"));
-    const col = Number(cell.getAttribute("data-col"));
-    if (Number.isInteger(row))
-      maxRow = Math.max(maxRow, row);
-    if (Number.isInteger(col))
-      maxCol = Math.max(maxCol, col + (cell.colSpan || 1) - 1);
-  }
-  return { maxRow, maxCol };
-}
-function expandSelectionForDirection2(tableEl, selection, direction) {
-  if (direction === "horizontal" && selectionHasHorizontalSpan2(selection))
-    return selection;
-  if (direction === "vertical" && selectionHasVerticalSpan2(selection))
-    return selection;
-  const { maxRow, maxCol } = getTableBounds2(tableEl);
-  if (direction === "horizontal" && selection.focus.col < maxCol) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
-  }
-  if (direction === "vertical" && selection.focus.row < maxRow) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
-  }
-  return null;
-}
-function expandSelectionForUnmerge2(tableEl, selection) {
-  const bounds = {
-    rowStart: Math.min(selection.anchor.row, selection.focus.row),
-    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
-    colStart: Math.min(selection.anchor.col, selection.focus.col),
-    colEnd: Math.max(selection.anchor.col, selection.focus.col)
-  };
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-    const row = Number(cell.getAttribute("data-row"));
-    const col = Number(cell.getAttribute("data-col"));
-    if (!Number.isInteger(row) || !Number.isInteger(col))
-      continue;
-    const rowEnd = row + (cell.rowSpan || 1) - 1;
-    const colEnd = col + (cell.colSpan || 1) - 1;
-    const intersects = row <= bounds.rowEnd && rowEnd >= bounds.rowStart && col <= bounds.colEnd && colEnd >= bounds.colStart;
-    if (!intersects)
-      continue;
-    bounds.rowStart = Math.min(bounds.rowStart, row);
-    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
-    bounds.colStart = Math.min(bounds.colStart, col);
-    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
-  }
-  return {
-    anchor: { row: bounds.rowStart, col: bounds.colStart },
-    focus: { row: bounds.rowEnd, col: bounds.colEnd }
-  };
-}
 var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -1175,6 +1067,8 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     this.refreshTimer = null;
     this.observer = null;
     this.resizingTables = /* @__PURE__ */ new WeakSet();
+    this.specsCache = null;
+    this.pendingWidthsSave = null;
   }
   async onload() {
     await this.loadSettings();
@@ -1184,13 +1078,13 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
         return;
       if (!this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView))
         return;
-      const tables = Array.from(element.querySelectorAll("table:not([id='sheet-extend-parsed'])"));
+      const tables = Array.from(element.querySelectorAll("table:not(.sheet-extend-parsed)"));
       for (const tableEl of tables) {
         this.processTable(tableEl, context);
       }
     });
     this.registerMarkdownCodeBlockProcessor("sheet", (source, el, ctx) => {
-      const parsed = this.settings.enableFormulas ? applyFormulas(parseAndMerge(source)) : parseAndMerge(source);
+      const parsed = parseAndMerge(source);
       const tableEl = el.createEl("table");
       renderTable(this.app, tableEl, parsed, ctx.sourcePath, this);
       this.setupResizer(tableEl);
@@ -1264,12 +1158,10 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     let inTable = false;
     let blockStart = -1;
     for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      const isTableLine = trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
-      if (isTableLine && !inTable) {
+      if (isTableLine(lines[i]) && !inTable) {
         inTable = true;
         blockStart = i;
-      } else if (!isTableLine && inTable) {
+      } else if (!isTableLine(lines[i]) && inTable) {
         inTable = false;
         tableBlocks.push({ start: blockStart, end: i - 1 });
       }
@@ -1340,7 +1232,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       this.enhanceSourceModeTable(tableEl, match);
       return;
     }
-    const parsed = this.settings.enableFormulas ? applyFormulas(parseAndMerge(match.text)) : parseAndMerge(match.text);
+    const parsed = parseAndMerge(match.text);
     renderTable(this.app, tableEl, parsed, match.sourcePath, this);
     this.applyTableMatchMetadata(tableEl, match);
     this.tableRanges.set(tableEl, match.range);
@@ -1512,7 +1404,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range)
       return false;
-    const selection = expandSelectionForDirection2(active.tableEl, active.selection, direction);
+    const selection = expandSelectionForDirection(active.tableEl, active.selection, direction);
     if (!selection)
       return false;
     if (!checking) {
@@ -1530,9 +1422,9 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range)
       return;
-    const horizontalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "horizontal");
-    const verticalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "vertical");
-    const unmergeSelection = expandSelectionForUnmerge2(active.tableEl, active.selection);
+    const horizontalSelection = expandSelectionForDirection(active.tableEl, active.selection, "horizontal");
+    const verticalSelection = expandSelectionForDirection(active.tableEl, active.selection, "vertical");
+    const unmergeSelection = expandSelectionForUnmerge(active.tableEl, active.selection);
     (_a = menu.addSeparator) == null ? void 0 : _a.call(menu);
     menu.addItem((item) => {
       item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!horizontalSelection).onClick(() => {
@@ -1563,7 +1455,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     const range = this.tableRanges.get(active.tableEl) || null;
     if (!range)
       return false;
-    const selection = expandSelectionForUnmerge2(active.tableEl, active.selection);
+    const selection = expandSelectionForUnmerge(active.tableEl, active.selection);
     if (!checking) {
       if (runUnmergeCommand(this.app, range, selection)) {
         this.scheduleLivePreviewRefresh(0);
@@ -1577,7 +1469,16 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
    * "header text appears in a line" matching.
    */
   findTableInSource(fullDoc, tableEl) {
-    const tableSpecs = extractMarkdownTableSpecs(fullDoc);
+    var _a, _b, _c, _d, _e;
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    const docVersion = (_e = (_d = (_c = (_b = (_a = view == null ? void 0 : view.editor) == null ? void 0 : _a.cm) == null ? void 0 : _b.state) == null ? void 0 : _c.doc) == null ? void 0 : _d.version) != null ? _e : -1;
+    let tableSpecs;
+    if (this.specsCache && this.specsCache.version === docVersion) {
+      tableSpecs = this.specsCache.specs;
+    } else {
+      tableSpecs = extractMarkdownTableSpecs(fullDoc);
+      this.specsCache = { version: docVersion, specs: tableSpecs };
+    }
     const sourceLine = this.getSourceLineForTable(tableEl);
     if (sourceLine !== null && Number.isInteger(sourceLine)) {
       const sourceLineMatch = tableSpecs.find(
@@ -1606,9 +1507,16 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       onResizeEnd: (widths) => {
         this.resizingTables.delete(tableEl);
         const currentTableId = getTableIds(tableEl);
-        if (!this.writeWidthsToMarkdown(tableEl, widths)) {
-          saveWidths(this, currentTableId, widths);
+        if (this.writeWidthsToMarkdown(tableEl, widths)) {
+          this.syncWidthsAcrossOpenViews(tableEl, currentTableId, widths);
+          return;
         }
+        if (this.pendingWidthsSave !== null)
+          window.clearTimeout(this.pendingWidthsSave);
+        this.pendingWidthsSave = window.setTimeout(() => {
+          this.pendingWidthsSave = null;
+          saveWidths(this, currentTableId, widths);
+        }, 200);
         this.syncWidthsAcrossOpenViews(tableEl, currentTableId, widths);
       }
     });
@@ -1724,7 +1632,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       return;
     const sourcePath = ((_a = view.file) == null ? void 0 : _a.path) || "";
     const tables = Array.from(
-      view.contentEl.querySelectorAll("table:not([id='sheet-extend-parsed'])")
+      view.contentEl.querySelectorAll("table:not(.sheet-extend-parsed)")
     ).filter((table) => table instanceof HTMLTableElement);
     for (const tableEl of tables) {
       if (tableEl.hasAttribute("data-resizing") || this.resizingTables.has(tableEl)) {
@@ -1761,21 +1669,11 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   async loadSettings() {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data == null ? void 0 : data.settings);
-    const savedVersion = (data == null ? void 0 : data.version) || "0.0.0";
-    if (savedVersion !== "1.3.0") {
-      this.widthStore = {};
-      await this.saveData({
-        version: "1.3.0",
-        settings: this.settings,
-        columnWidths: {}
-      });
-    } else {
-      this.widthStore = (data == null ? void 0 : data.columnWidths) || {};
-    }
+    this.widthStore = (data == null ? void 0 : data.columnWidths) || {};
   }
   async saveSettings() {
     await this.saveData({
-      version: "1.3.0",
+      version: DATA_VERSION,
       settings: this.settings,
       columnWidths: this.widthStore
     });

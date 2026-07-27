@@ -1,4 +1,11 @@
 import type { TableRange } from "./writeback";
+import { getLineEnding, splitLines, isTableLine } from "./utils";
+
+export { getLineEnding };
+
+// ponytail: aliased for backward compat; identical to splitLines from utils
+export const splitMarkdownLines = splitLines;
+export const isMarkdownTableLine = isTableLine;
 
 export interface MarkdownTableColumn {
   alignLeft: boolean;
@@ -15,19 +22,6 @@ export interface MarkdownTableSpec {
   columns: MarkdownTableColumn[];
   rawHeaderLine: string;
   rawSeparatorLine: string;
-}
-
-export function getLineEnding(text: string): "\r\n" | "\n" {
-  return text.includes("\r\n") ? "\r\n" : "\n";
-}
-
-export function splitMarkdownLines(text: string): string[] {
-  return text.split(/\r?\n/);
-}
-
-export function isMarkdownTableLine(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
 }
 
 export function splitMarkdownRow(line: string): string[] {

@@ -7,7 +7,6 @@ export interface SheetExtendSettings {
   nativeProcessing: boolean;
   widthPersistence: "plugin" | "markdown";
   pixelsPerDash: number;
-  enableFormulas: boolean;
 }
 
 export const DEFAULT_SETTINGS: SheetExtendSettings = {
@@ -17,7 +16,6 @@ export const DEFAULT_SETTINGS: SheetExtendSettings = {
   nativeProcessing: true,
   widthPersistence: "plugin",
   pixelsPerDash: 8,
-  enableFormulas: true,
 };
 
 export class SheetExtendSettingTab extends PluginSettingTab {
@@ -40,7 +38,7 @@ export class SheetExtendSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "sheet extend settings" });
+    containerEl.createEl("h2", { text: "Sheet Extend Settings" });
 
     new Setting(containerEl)
       .setName("Minimum column width")
@@ -112,15 +110,5 @@ export class SheetExtendSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Enable table formulas")
-      .setDesc("Render =sum, =avg, =count, =max, and =min in enhanced tables")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.settings.enableFormulas)
-          .onChange(async (value) => {
-            await this.updateSettings({ enableFormulas: value });
-          })
-      );
   }
 }

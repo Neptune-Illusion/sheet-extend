@@ -1,9 +1,9 @@
-import { Plugin, MarkdownView, MarkdownRenderChild } from "obsidian";
+import { Plugin, MarkdownView } from "obsidian";
 import { SheetExtendSettings, DEFAULT_SETTINGS, SheetExtendSettingTab } from "./src/settings";
 import { parseAndMerge } from "./src/sheet/parser";
 import { renderTable } from "./src/sheet/renderer";
 import { hasMergeMarkers, hasMergeMarkersInElement } from "./src/sheet/detect";
-import { applyFormulas } from "./src/sheet/formulas";
+
 import {
   buildSeparatorLineForWidths,
   extractMarkdownTableSpecs,
@@ -11,8 +11,9 @@ import {
   splitMarkdownLines,
 } from "./src/sheet/markdown-table";
 import { makeTableResizable } from "./src/resizer/resizer";
-import { getTableIds, saveWidths, loadWidths, applySavedWidths } from "./src/resizer/persistence";
+import { getTableIds, saveWidths, loadWidths, applySavedWidths, DATA_VERSION } from "./src/resizer/persistence";
 import { installMergeInteraction, runMergeCommand, runUnmergeCommand } from "./src/merge/interaction";
+import { expandSelectionForDirection, expandSelectionForUnmerge, getTableBounds, selectionHasHorizontalSpan, selectionHasVerticalSpan, isTableLine } from "./src/sheet/utils";
 import type { CellSelection, TableRange } from "./src/sheet/writeback";
 
 interface TableMatch {
@@ -69,98 +70,7 @@ function isSourceModeTable(tableEl: HTMLTableElement): boolean {
   return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
 }
 
-function selectionHasHorizontalSpan(selection: CellSelection): boolean {
-  return Math.abs(selection.anchor.col - selection.focus.col) > 0;
-}
 
-function selectionHasVerticalSpan(selection: CellSelection): boolean {
-  return Math.abs(selection.anchor.row - selection.focus.row) > 0;
-}
-
-function getTableBounds(tableEl: HTMLTableElement): { maxRow: number; maxCol: number } {
-  let maxRow = 0;
-  let maxCol = 0;
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLElement[]) {
-    const row = Number(cell.getAttribute("data-row"));
-    const col = Number(cell.getAttribute("data-col"));
-    if (Number.isInteger(row)) maxRow = Math.max(maxRow, row);
-    if (Number.isInteger(col)) maxCol = Math.max(maxCol, col + ((cell as HTMLTableCellElement).colSpan || 1) - 1);
-  }
-  return { maxRow, maxCol };
-}
-
-function expandSelectionForDirection(
-  tableEl: HTMLTableElement,
-  selection: CellSelection,
-  direction: "horizontal" | "vertical"
-): CellSelection | null {
-  if (direction === "horizontal" && selectionHasHorizontalSpan(selection)) return selection;
-  if (direction === "vertical" && selectionHasVerticalSpan(selection)) return selection;
-
-  const { maxRow, maxCol } = getTableBounds(tableEl);
-  if (direction === "horizontal" && selection.focus.col < maxCol) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
-  }
-  if (direction === "vertical" && selection.focus.row < maxRow) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
-  }
-  return null;
-}
-
-function expandSelectionForUnmerge(tableEl: HTMLTableElement, selection: CellSelection): CellSelection {
-  const bounds = {
-    rowStart: Math.min(selection.anchor.row, selection.focus.row),
-    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
-    colStart: Math.min(selection.anchor.col, selection.focus.col),
-    colEnd: Math.max(selection.anchor.col, selection.focus.col),
-  };
-
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
-    const row = Number(cell.getAttribute("data-row"));
-    const col = Number(cell.getAttribute("data-col"));
-    if (!Number.isInteger(row) || !Number.isInteger(col)) continue;
-
-    const rowEnd = row + (cell.rowSpan || 1) - 1;
-    const colEnd = col + (cell.colSpan || 1) - 1;
-    const intersects = (
-      row <= bounds.rowEnd &&
-      rowEnd >= bounds.rowStart &&
-      col <= bounds.colEnd &&
-      colEnd >= bounds.colStart
-    );
-    if (!intersects) continue;
-
-    bounds.rowStart = Math.min(bounds.rowStart, row);
-    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
-    bounds.colStart = Math.min(bounds.colStart, col);
-    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
-  }
-
-  return {
-    anchor: { row: bounds.rowStart, col: bounds.colStart },
-    focus: { row: bounds.rowEnd, col: bounds.colEnd },
-  };
-}
-
-class SheetExtendRenderChild extends MarkdownRenderChild {
-  constructor(
-    containerEl: HTMLElement,
-    private app: import("obsidian").App,
-    private sourcePath: string,
-    private content: string,
-    private enableFormulas: boolean
-  ) {
-    super(containerEl);
-  }
-
-  onload() {
-    const tableEl = this.containerEl.createEl("table");
-    const parsed = this.enableFormulas
-      ? applyFormulas(parseAndMerge(this.content))
-      : parseAndMerge(this.content);
-    renderTable(this.app, tableEl, parsed, this.sourcePath, this);
-  }
-}
 
 export default class SheetExtendPlugin extends Plugin {
   settings: SheetExtendSettings;
@@ -179,16 +89,14 @@ export default class SheetExtendPlugin extends Plugin {
       if (!this.settings.nativeProcessing) return;
       if (!this.app.workspace.getActiveViewOfType(MarkdownView)) return;
 
-      const tables = Array.from(element.querySelectorAll("table:not([id='sheet-extend-parsed'])"));
+      const tables = Array.from(element.querySelectorAll("table:not(.sheet-extend-parsed)"));
       for (const tableEl of tables) {
         this.processTable(tableEl as HTMLTableElement, context);
       }
     });
 
     this.registerMarkdownCodeBlockProcessor("sheet", (source, el, ctx) => {
-      const parsed = this.settings.enableFormulas
-        ? applyFormulas(parseAndMerge(source))
-        : parseAndMerge(source);
+      const parsed = parseAndMerge(source);
       const tableEl = el.createEl("table");
       renderTable(this.app, tableEl, parsed, ctx.sourcePath, this);
       this.setupResizer(tableEl);
@@ -276,13 +184,10 @@ export default class SheetExtendPlugin extends Plugin {
     let blockStart = -1;
 
     for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      const isTableLine = trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.length > 1;
-
-      if (isTableLine && !inTable) {
+      if (isTableLine(lines[i]) && !inTable) {
         inTable = true;
         blockStart = i;
-      } else if (!isTableLine && inTable) {
+      } else if (!isTableLine(lines[i]) && inTable) {
         inTable = false;
         tableBlocks.push({ start: blockStart, end: i - 1 });
       }
@@ -370,9 +275,7 @@ export default class SheetExtendPlugin extends Plugin {
       return;
     }
 
-    const parsed = this.settings.enableFormulas
-      ? applyFormulas(parseAndMerge(match.text))
-      : parseAndMerge(match.text);
+    const parsed = parseAndMerge(match.text);
     renderTable(this.app, tableEl, parsed, match.sourcePath, this);
     this.applyTableMatchMetadata(tableEl, match);
     this.tableRanges.set(tableEl, match.range);
@@ -644,13 +547,24 @@ export default class SheetExtendPlugin extends Plugin {
     return true;
   }
 
+  private specsCache: { version: number; specs: ReturnType<typeof extractMarkdownTableSpecs> } | null = null;
+
   /**
    * Locate the raw markdown table block corresponding to a rendered table.
    * Prefer unique content/body/header signatures over brittle
    * "header text appears in a line" matching.
    */
   private findTableInSource(fullDoc: string, tableEl: HTMLTableElement): { text: string; range: TableRange; tableOrdinal?: number } | null {
-    const tableSpecs = extractMarkdownTableSpecs(fullDoc);
+    // ponytail: cache specs per CM6 doc version to avoid full-document scan on every keystroke
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const docVersion = (view?.editor as any)?.cm?.state?.doc?.version ?? -1;
+    let tableSpecs: ReturnType<typeof extractMarkdownTableSpecs>;
+    if (this.specsCache && this.specsCache.version === docVersion) {
+      tableSpecs = this.specsCache.specs;
+    } else {
+      tableSpecs = extractMarkdownTableSpecs(fullDoc);
+      this.specsCache = { version: docVersion, specs: tableSpecs };
+    }
     const sourceLine = this.getSourceLineForTable(tableEl);
     if (sourceLine !== null && Number.isInteger(sourceLine)) {
       const sourceLineMatch = tableSpecs.find(
@@ -669,6 +583,8 @@ export default class SheetExtendPlugin extends Plugin {
     return matched ? { text: matched.text, range: matched.range, tableOrdinal: matched.tableOrdinal } : null;
   }
 
+  private pendingWidthsSave: number | null = null;
+
   private setupResizer(tableEl: HTMLTableElement) {
     makeTableResizable(this, tableEl, {
       onResizeStart: () => {
@@ -681,9 +597,16 @@ export default class SheetExtendPlugin extends Plugin {
       onResizeEnd: (widths) => {
         this.resizingTables.delete(tableEl);
         const currentTableId = getTableIds(tableEl);
-        if (!this.writeWidthsToMarkdown(tableEl, widths)) {
-          saveWidths(this, currentTableId, widths);
+        if (this.writeWidthsToMarkdown(tableEl, widths)) {
+          this.syncWidthsAcrossOpenViews(tableEl, currentTableId, widths);
+          return;
         }
+        // ponytail: debounce saveData to avoid I/O burst on rapid drags
+        if (this.pendingWidthsSave !== null) window.clearTimeout(this.pendingWidthsSave);
+        this.pendingWidthsSave = window.setTimeout(() => {
+          this.pendingWidthsSave = null;
+          saveWidths(this, currentTableId, widths);
+        }, 200);
         this.syncWidthsAcrossOpenViews(tableEl, currentTableId, widths);
       },
     });
@@ -816,7 +739,7 @@ export default class SheetExtendPlugin extends Plugin {
 
     const sourcePath = view.file?.path || "";
     const tables = Array.from(
-      view.contentEl.querySelectorAll("table:not([id='sheet-extend-parsed'])")
+      view.contentEl.querySelectorAll("table:not(.sheet-extend-parsed)")
     ).filter((table): table is HTMLTableElement => table instanceof HTMLTableElement);
 
     for (const tableEl of tables) {
@@ -853,23 +776,13 @@ export default class SheetExtendPlugin extends Plugin {
   async loadSettings() {
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
-    const savedVersion = data?.version || "0.0.0";
-
-    if (savedVersion !== "1.3.0") {
-      this.widthStore = {};
-      await this.saveData({
-        version: "1.3.0",
-        settings: this.settings,
-        columnWidths: {},
-      });
-    } else {
-      this.widthStore = data?.columnWidths || {};
-    }
+    // ponytail: preserve columnWidths across versions; only upgrade the version field
+    this.widthStore = data?.columnWidths || {};
   }
 
   async saveSettings() {
     await this.saveData({
-      version: "1.3.0",
+      version: DATA_VERSION,
       settings: this.settings,
       columnWidths: this.widthStore,
     });

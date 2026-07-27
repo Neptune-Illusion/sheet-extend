@@ -53,7 +53,17 @@ export function makeTableResizable(
 
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
+      // ponytail: cleanup on window blur (mouse released outside window)
+      window.addEventListener("blur", onBlur);
     });
+
+    const onBlur = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onBlur);
+      tableEl.removeAttribute("data-resizing");
+      document.body.classList.remove("sheet-extend-resizing");
+    };
 
     const onMouseMove = (e: MouseEvent) => {
       const diff = e.clientX - startX;
@@ -69,6 +79,7 @@ export function makeTableResizable(
     const onMouseUp = () => {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onBlur);
 
       tableEl.removeAttribute("data-resizing");
       document.body.classList.remove("sheet-extend-resizing");

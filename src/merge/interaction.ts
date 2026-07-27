@@ -7,6 +7,7 @@ import {
   type MergeDirection,
   type TableRange,
 } from "../sheet/writeback";
+import { normalizeSelection, selectionHasHorizontalSpan, selectionHasVerticalSpan, getTableBounds, expandSelectionForDirection, expandSelectionForUnmerge } from "../sheet/utils";
 
 interface MergeActionContext {
   tableEl: HTMLTableElement;
@@ -34,20 +35,6 @@ function getCellPosition(cell: HTMLElement): CellPosition | null {
   return { row, col };
 }
 
-function normalizeSelection(selection: CellSelection): {
-  rowStart: number;
-  rowEnd: number;
-  colStart: number;
-  colEnd: number;
-} {
-  return {
-    rowStart: Math.min(selection.anchor.row, selection.focus.row),
-    rowEnd: Math.max(selection.anchor.row, selection.focus.row),
-    colStart: Math.min(selection.anchor.col, selection.focus.col),
-    colEnd: Math.max(selection.anchor.col, selection.focus.col),
-  };
-}
-
 function containsPosition(selection: CellSelection, position: CellPosition): boolean {
   const bounds = normalizeSelection(selection);
   return (
@@ -58,78 +45,27 @@ function containsPosition(selection: CellSelection, position: CellPosition): boo
   );
 }
 
-function selectionHasHorizontalSpan(selection: CellSelection): boolean {
-  const bounds = normalizeSelection(selection);
-  return bounds.colEnd > bounds.colStart;
-}
-
-function selectionHasVerticalSpan(selection: CellSelection): boolean {
-  const bounds = normalizeSelection(selection);
-  return bounds.rowEnd > bounds.rowStart;
-}
-
-function getTableBounds(tableEl: HTMLTableElement): { maxRow: number; maxCol: number } {
-  let maxRow = 0;
-  let maxCol = 0;
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
-    const position = getCellPosition(cell);
-    if (!position) continue;
-    maxRow = Math.max(maxRow, position.row);
-    maxCol = Math.max(maxCol, position.col + (cell.colSpan || 1) - 1);
-  }
-  return { maxRow, maxCol };
-}
-
-function expandSelectionForDirection(
-  tableEl: HTMLTableElement,
-  selection: CellSelection,
-  direction: MergeDirection
-): CellSelection | null {
-  if (direction === "horizontal" && selectionHasHorizontalSpan(selection)) return selection;
-  if (direction === "vertical" && selectionHasVerticalSpan(selection)) return selection;
-
-  const bounds = getTableBounds(tableEl);
-  if (direction === "horizontal" && selection.focus.col < bounds.maxCol) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row, col: selection.focus.col + 1 } };
-  }
-  if (direction === "vertical" && selection.focus.row < bounds.maxRow) {
-    return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
-  }
-  return null;
-}
-
-function expandSelectionForUnmerge(tableEl: HTMLTableElement, selection: CellSelection): CellSelection {
-  const bounds = normalizeSelection(selection);
-
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
-    const position = getCellPosition(cell);
-    if (!position) continue;
-
-    const rowEnd = position.row + (cell.rowSpan || 1) - 1;
-    const colEnd = position.col + (cell.colSpan || 1) - 1;
-    const intersects = (
-      position.row <= bounds.rowEnd &&
-      rowEnd >= bounds.rowStart &&
-      position.col <= bounds.colEnd &&
-      colEnd >= bounds.colStart
-    );
-    if (!intersects) continue;
-
-    bounds.rowStart = Math.min(bounds.rowStart, position.row);
-    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
-    bounds.colStart = Math.min(bounds.colStart, position.col);
-    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
-  }
-
-  return {
-    anchor: { row: bounds.rowStart, col: bounds.colStart },
-    focus: { row: bounds.rowEnd, col: bounds.colEnd },
-  };
-}
-
 function getEditor(app: App): Editor | null {
   const view = app.workspace.getActiveViewOfType(MarkdownView);
   return view?.editor || null;
+}
+
+// ponytail: replaceRange preserves undo history; setValue resets it
+function replaceTableInEditor(
+  editor: Editor,
+  range: TableRange,
+  oldDoc: string,
+  newDoc: string
+): void {
+  const oldLines = oldDoc.split("\n");
+  const newLines = newDoc.split("\n");
+  const newTableText = newLines.slice(range.startLine, range.endLine + 1).join("\n");
+  editor.replaceRange(
+    newTableText,
+    { line: range.startLine, ch: 0 },
+    { line: range.endLine, ch: oldLines[range.endLine]?.length ?? 0 }
+  );
+  editor.setCursor({ line: range.startLine, ch: 0 });
 }
 
 class MergeInteraction {
@@ -247,9 +183,9 @@ class MergeInteraction {
     const range = this.host.getTableRange(this.tableEl);
     if (!editor || !range) return;
 
-    const nextText = getNextDocument(editor.getValue(), range, this.selection);
-    editor.setValue(nextText);
-    editor.setCursor({ line: range.startLine, ch: 0 });
+    const oldDoc = editor.getValue();
+    const newDoc = getNextDocument(oldDoc, range, this.selection);
+    replaceTableInEditor(editor, range, oldDoc, newDoc);
     this.host.onDocumentChanged?.();
   }
 }
@@ -269,8 +205,9 @@ export function runMergeCommand(
   const editor = getEditor(app);
   if (!editor || !range || !selection) return false;
 
-  editor.setValue(applyMergeToDocument(editor.getValue(), range, selection, direction).text);
-  editor.setCursor({ line: range.startLine, ch: 0 });
+  const oldDoc = editor.getValue();
+  const newDoc = applyMergeToDocument(oldDoc, range, selection, direction).text;
+  replaceTableInEditor(editor, range, oldDoc, newDoc);
   return true;
 }
 
@@ -282,7 +219,8 @@ export function runUnmergeCommand(
   const editor = getEditor(app);
   if (!editor || !range || !selection) return false;
 
-  editor.setValue(clearMergeInDocument(editor.getValue(), range, selection).text);
-  editor.setCursor({ line: range.startLine, ch: 0 });
+  const oldDoc = editor.getValue();
+  const newDoc = clearMergeInDocument(oldDoc, range, selection).text;
+  replaceTableInEditor(editor, range, oldDoc, newDoc);
   return true;
 }

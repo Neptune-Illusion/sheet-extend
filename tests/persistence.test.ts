@@ -32,16 +32,15 @@ describe("getTableId", () => {
     expect(getTableIds(table)).toEqual([
       "table-notes/demo.md-12",
       "table-notes/demo.md-ordinal-2",
-      "table-fallback-Hello_World",
+      "table-notes/demo.md-ordinal-2-fallback",
     ]);
   });
 
-  it("falls back for tables without attributes", () => {
+  it("falls back to empty ids for tables without attributes", () => {
     const table = document.createElement("table");
     table.textContent = "Hello World";
-    const id = getTableId(table);
-    expect(typeof id).toBe("string");
-    expect(id.length).toBeGreaterThan(0);
+    const ids = getTableIds(table);
+    expect(ids).toEqual([]);
   });
 
   it("saves widths with the current data schema version", () => {
@@ -55,7 +54,7 @@ describe("getTableId", () => {
     saveWidths(plugin, "table-demo", [120, null]);
 
     expect(saveData).toHaveBeenCalledWith({
-      version: "1.3.0",
+      version: "1.5.0",
       settings: {},
       columnWidths: { "table-demo": [120, null] },
     });

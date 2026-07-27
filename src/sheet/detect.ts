@@ -1,7 +1,7 @@
 /**
  * Detect merge markers in markdown table source text.
  * A merge marker is a cell whose trimmed content is exactly "<" or "^", or
- * a hidden sheet extend marker comment written by the plugin.
+ * a hidden Sheet Extend marker comment written by the plugin.
  * HTML tags like <font>, <br>, </font> must NOT be treated as merge markers.
  */
 export function hasMergeMarkers(text: string): boolean {
