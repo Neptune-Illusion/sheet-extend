@@ -23,6 +23,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // main.ts
 var main_exports = {};
 __export(main_exports, {
+  applyPostProcessorIdentity: () => applyPostProcessorIdentity,
   default: () => SheetExtendPlugin
 });
 module.exports = __toCommonJS(main_exports);
@@ -36,9 +37,20 @@ var DEFAULT_SETTINGS = {
   defaultWidth: 150,
   nativeProcessing: true,
   widthPersistence: "plugin",
-  pixelsPerDash: 8,
-  enableFormulas: true
+  pixelsPerDash: 8
 };
+function sanitizeSettings(loaded) {
+  if (!loaded || typeof loaded !== "object")
+    return {};
+  const source = loaded;
+  const out = {};
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    const value = source[key];
+    if (value !== void 0)
+      out[key] = value;
+  }
+  return out;
+}
 var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -83,11 +95,6 @@ var SheetExtendSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("Pixels per separator dash").setDesc("Used when storing column widths in Markdown").addSlider(
       (slider) => slider.setLimits(4, 20, 1).setValue(this.settings.pixelsPerDash).onChange(async (value) => {
         await this.updateSettings({ pixelsPerDash: value });
-      })
-    );
-    new import_obsidian.Setting(containerEl).setName("Enable table formulas").setDesc("Render =sum, =avg, =count, =max, and =min in enhanced tables").addToggle(
-      (toggle) => toggle.setValue(this.settings.enableFormulas).onChange(async (value) => {
-        await this.updateSettings({ enableFormulas: value });
       })
     );
   }
@@ -202,29 +209,55 @@ function parseTable(text) {
   return { grid, alignments };
 }
 function applyMerges(grid) {
-  for (let r = 0; r < grid.length; r++) {
-    for (let c = 0; c < grid[r].length; c++) {
+  const rowCount = grid.length;
+  if (rowCount === 0)
+    return;
+  const colCount = grid[0].length;
+  const owner = [];
+  for (let r = 0; r < rowCount; r++) {
+    const row = [];
+    for (let c = 0; c < colCount; c++)
+      row.push(grid[r][c]);
+    owner.push(row);
+  }
+  const pos = /* @__PURE__ */ new Map();
+  for (let r = 0; r < rowCount; r++) {
+    for (let c = 0; c < colCount; c++) {
+      pos.set(grid[r][c], { r, c });
+    }
+  }
+  const expandToCover = (anch, r, c) => {
+    const p = pos.get(anch);
+    const rowEnd = p.r + (anch.rowspan || 1);
+    const colEnd = p.c + (anch.colspan || 1);
+    if (r >= rowEnd)
+      anch.rowspan = r - p.r + 1;
+    if (c >= colEnd)
+      anch.colspan = c - p.c + 1;
+    const rrEnd = p.r + anch.rowspan;
+    const ccEnd = p.c + anch.colspan;
+    for (let rr = p.r; rr < rrEnd; rr++) {
+      for (let cc = p.c; cc < ccEnd; cc++) {
+        owner[rr][cc] = anch;
+        const cell = grid[rr][cc];
+        if (cell !== anch)
+          cell.hidden = true;
+      }
+    }
+  };
+  for (let r = 0; r < rowCount; r++) {
+    for (let c = 0; c < colCount; c++) {
       const cell = grid[r][c];
       if (cell.hidden)
         continue;
       if (isMergeLeftMarker(cell.text) && c > 0) {
-        for (let pc = c - 1; pc >= 0; pc--) {
-          const prev = grid[r][pc];
-          if (!prev.hidden) {
-            prev.colspan = (prev.colspan || 1) + 1;
-            cell.hidden = true;
-            break;
-          }
-        }
+        const anch = owner[r][c - 1];
+        expandToCover(anch, r, c);
+        cell.hidden = true;
       } else if (isMergeUpMarker(cell.text) && r > 0) {
-        for (let pr = r - 1; pr >= 0; pr--) {
-          const prev = grid[pr][c];
-          if (!prev.hidden) {
-            prev.rowspan = (prev.rowspan || 1) + 1;
-            cell.hidden = true;
-            break;
-          }
-        }
+        const anch = owner[r - 1][c];
+        expandToCover(anch, r, c);
+        cell.hidden = true;
       }
     }
   }
@@ -260,6 +293,17 @@ function hasRowspanAcrossBoundary(grid, headerCount) {
   }
   return false;
 }
+function getRenderedColumnCount(grid) {
+  let count = 0;
+  for (const row of grid) {
+    for (let col = 0; col < row.length; col++) {
+      const cell = row[col];
+      if (!cell.hidden)
+        count = Math.max(count, col + (cell.colspan || 1));
+    }
+  }
+  return count;
+}
 function renderTable(app, tableEl, parsed, sourcePath, component) {
   const { grid, alignments } = parsed;
   tableEl.empty();
@@ -267,7 +311,7 @@ function renderTable(app, tableEl, parsed, sourcePath, component) {
   tableEl.removeAttribute("data-resizable");
   if (grid.length === 0)
     return;
-  const colCount = Math.max(...grid.map((row) => row.length));
+  const colCount = getRenderedColumnCount(grid);
   const colgroup = tableEl.createEl("colgroup");
   for (let i = 0; i < colCount; i++) {
     const col = colgroup.createEl("col");
@@ -349,68 +393,6 @@ function renderTable(app, tableEl, parsed, sourcePath, component) {
       }
     }
   }
-}
-
-// src/sheet/formulas.ts
-function parseFormula(text) {
-  const match = text.trim().toLowerCase().match(/^=(sum|avg|count|max|min)$/);
-  return match ? match[1] : null;
-}
-function parseNumber(text) {
-  const normalized = text.replace(/,/g, "").trim();
-  if (!normalized)
-    return null;
-  const value = Number(normalized);
-  return Number.isFinite(value) ? value : null;
-}
-function formatNumber(value) {
-  if (Number.isInteger(value))
-    return String(value);
-  return String(Number(value.toFixed(4)));
-}
-function calculateFormula(name, values) {
-  if (name === "count")
-    return String(values.length);
-  if (!values.length)
-    return "";
-  if (name === "sum")
-    return formatNumber(values.reduce((sum, value) => sum + value, 0));
-  if (name === "avg")
-    return formatNumber(values.reduce((sum, value) => sum + value, 0) / values.length);
-  if (name === "max")
-    return formatNumber(Math.max(...values));
-  return formatNumber(Math.min(...values));
-}
-function applyFormulas(parsed) {
-  var _a;
-  const grid = parsed.grid.map((row) => row.map((cell) => ({ ...cell })));
-  const originalGrid = parsed.grid;
-  for (let row = 1; row < grid.length; row++) {
-    for (let col = 0; col < grid[row].length; col++) {
-      const cell = grid[row][col];
-      if (cell.hidden)
-        continue;
-      const formula = parseFormula(cell.text);
-      if (!formula)
-        continue;
-      const values = [];
-      for (let sourceRow = 1; sourceRow < row; sourceRow++) {
-        const sourceCell = (_a = originalGrid[sourceRow]) == null ? void 0 : _a[col];
-        if (!sourceCell || sourceCell.hidden)
-          continue;
-        if (parseFormula(sourceCell.text))
-          continue;
-        const value = parseNumber(sourceCell.text);
-        if (value !== null)
-          values.push(value);
-      }
-      cell.text = calculateFormula(formula, values);
-    }
-  }
-  return {
-    ...parsed,
-    grid
-  };
 }
 
 // src/sheet/markdown-table.ts
@@ -693,8 +675,11 @@ function getTableIds(tableEl) {
 function saveWidths(plugin, tableId, widths) {
   const store = plugin.widthStore || {};
   const tableIds = Array.isArray(tableId) ? tableId : [tableId];
+  const stableIds = tableIds.filter((id) => !id.startsWith("table-fallback-"));
+  if (stableIds.length === 0)
+    return;
   const hasData = widths.some((w) => w !== null);
-  for (const id of tableIds) {
+  for (const id of stableIds) {
     if (hasData) {
       store[id] = widths;
     } else {
@@ -831,7 +816,7 @@ function clearMergeMarkers(tableText, selection) {
   const lines = splitLines(tableText);
   const lineEnding = getLineEnding2(tableText);
   const { parsed, delimiterIndex } = parseTableLines(lines);
-  const normalized = normalizeSelection(selection);
+  const normalized = expandSelectionAcrossSpans(tableText, selection);
   for (let row = normalized.rowStart; row <= normalized.rowEnd; row++) {
     const lineIndex = markdownLineForGridRow(row, delimiterIndex);
     const line = parsed[lineIndex];
@@ -844,6 +829,27 @@ function clearMergeMarkers(tableText, selection) {
     }
   }
   return parsed.map(serializeLine).join(lineEnding);
+}
+function expandSelectionAcrossSpans(tableText, selection) {
+  const bounds = normalizeSelection(selection);
+  const grid = parseAndMerge(tableText).grid;
+  for (let row = 0; row < grid.length; row++) {
+    for (let col = 0; col < grid[row].length; col++) {
+      const cell = grid[row][col];
+      if (cell.hidden)
+        continue;
+      const rowEnd = row + (cell.rowspan || 1) - 1;
+      const colEnd = col + (cell.colspan || 1) - 1;
+      const intersects = row <= bounds.rowEnd && rowEnd >= bounds.rowStart && col <= bounds.colEnd && colEnd >= bounds.colStart;
+      if (!intersects)
+        continue;
+      bounds.rowStart = Math.min(bounds.rowStart, row);
+      bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
+      bounds.colStart = Math.min(bounds.colStart, col);
+      bounds.colEnd = Math.max(bounds.colEnd, colEnd);
+    }
+  }
+  return bounds;
 }
 function replaceTableRange(documentText, range, tableText) {
   const lines = splitLines(documentText);
@@ -870,7 +876,154 @@ function clearMergeInDocument(documentText, range, selection) {
   };
 }
 
+// src/sheet/table-style.ts
+function getLineEnding3(text) {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+function splitLines2(text) {
+  return text.split(/\r?\n/);
+}
+function parseAlignment(cell) {
+  const trimmed = cell.trim();
+  const left = trimmed.startsWith(":");
+  const right = trimmed.endsWith(":");
+  if (left && right)
+    return "center";
+  if (left)
+    return "left";
+  if (right)
+    return "right";
+  return "default";
+}
+function parseSeparatorLine2(line) {
+  const trimmed = line.trim();
+  const leadingPipe = trimmed.startsWith("|");
+  const trailingPipe = trimmed.endsWith("|");
+  let inner = trimmed;
+  if (leadingPipe)
+    inner = inner.slice(1);
+  if (trailingPipe)
+    inner = inner.slice(0, -1);
+  const rawCells = inner.split("|").map((cell) => cell.trim());
+  if (rawCells.length === 0 || rawCells.every((cell) => cell === ""))
+    return null;
+  const columns = [];
+  for (const cell of rawCells) {
+    if (cell === "") {
+      columns.push({ align: "default", dashCount: 3 });
+      continue;
+    }
+    const match = cell.match(/^(:)?(-{1,})(:)?$/);
+    if (!match)
+      return null;
+    columns.push({
+      align: parseAlignment(cell),
+      dashCount: match[2].length
+    });
+  }
+  return { original: line, leadingPipe, trailingPipe, columns };
+}
+function serializeAlignment(align, dashCount) {
+  const dashes = "-".repeat(dashCount);
+  switch (align) {
+    case "left":
+      return `:${dashes}`;
+    case "right":
+      return `${dashes}:`;
+    case "center":
+      return `:${dashes}:`;
+    default:
+      return dashes;
+  }
+}
+function serializeSeparatorLine(separator) {
+  const cells = separator.columns.map(
+    (column) => serializeAlignment(column.align, column.dashCount)
+  );
+  const body = ` ${cells.join(" | ")} `;
+  if (separator.leadingPipe && separator.trailingPipe)
+    return `|${body}|`;
+  if (separator.leadingPipe)
+    return `|${body}`;
+  if (separator.trailingPipe)
+    return `${body}|`;
+  return body.trim();
+}
+function findSeparatorLine(lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const separator = parseSeparatorLine2(lines[i]);
+    if (separator)
+      return i;
+  }
+  return -1;
+}
+function applyAlignment(separator, columnIndices, alignment) {
+  if (columnIndices.length === 0)
+    return separator;
+  const indices = new Set(columnIndices);
+  return {
+    ...separator,
+    columns: separator.columns.map(
+      (column, index) => indices.has(index) ? { ...column, align: alignment } : column
+    )
+  };
+}
+function setTableAlignment(markdown, alignment) {
+  const lines = splitLines2(markdown);
+  const lineEnding = getLineEnding3(markdown);
+  const separatorIndex = findSeparatorLine(lines);
+  if (separatorIndex < 0)
+    return markdown;
+  const separator = parseSeparatorLine2(lines[separatorIndex]);
+  const allColumns = separator.columns.map((_, index) => index);
+  lines[separatorIndex] = serializeSeparatorLine(
+    applyAlignment(separator, allColumns, alignment)
+  );
+  return lines.join(lineEnding);
+}
+
 // src/merge/interaction.ts
+async function resolveTableIdentityFromVault(app, tableEl) {
+  var _a;
+  const sourcePath = tableEl.getAttribute("data-source-path");
+  if (!sourcePath)
+    return null;
+  const vault = app.vault;
+  const file = (_a = vault == null ? void 0 : vault.getAbstractFileByPath) == null ? void 0 : _a.call(vault, sourcePath);
+  if (!file || !(vault == null ? void 0 : vault.read))
+    return null;
+  const docText = await vault.read(file);
+  const specs = extractMarkdownTableSpecs(docText);
+  if (!specs.length)
+    return null;
+  const probe = tableEl.cloneNode(true);
+  probe.removeAttribute("data-line-start");
+  delete probe.dataset.sheetExtendTableOrdinal;
+  const matched = matchMarkdownTableSpecForElement(specs, probe, null);
+  return matched ? { range: matched.range, tableOrdinal: matched.tableOrdinal } : null;
+}
+async function resolveTableRangeFromVault(app, tableEl) {
+  const identity = await resolveTableIdentityFromVault(app, tableEl);
+  return (identity == null ? void 0 : identity.range) || null;
+}
+async function writeTableUsingVault(app, sourcePath, range, selection, transform) {
+  var _a;
+  const vault = app.vault;
+  const file = sourcePath && ((_a = vault == null ? void 0 : vault.getAbstractFileByPath) == null ? void 0 : _a.call(vault, sourcePath));
+  if (!file || !(vault == null ? void 0 : vault.process))
+    return false;
+  await vault.process(file, (documentText) => transform(documentText, range, selection));
+  return true;
+}
+function getActiveSourcePath(app) {
+  var _a, _b, _c;
+  const workspace = app.workspace;
+  const activeFile = (_a = workspace == null ? void 0 : workspace.getActiveFile) == null ? void 0 : _a.call(workspace);
+  if (activeFile == null ? void 0 : activeFile.path)
+    return activeFile.path;
+  const view = (_b = workspace == null ? void 0 : workspace.activeLeaf) == null ? void 0 : _b.view;
+  return ((_c = view == null ? void 0 : view.file) == null ? void 0 : _c.path) || null;
+}
 function isSourceModeTable(tableEl) {
   return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
 }
@@ -926,27 +1079,6 @@ function expandSelectionForDirection(tableEl, selection, direction) {
     return { anchor: selection.anchor, focus: { row: selection.focus.row + 1, col: selection.focus.col } };
   }
   return null;
-}
-function expandSelectionForUnmerge(tableEl, selection) {
-  const bounds = normalizeSelection2(selection);
-  for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
-    const position = getCellPosition(cell);
-    if (!position)
-      continue;
-    const rowEnd = position.row + (cell.rowSpan || 1) - 1;
-    const colEnd = position.col + (cell.colSpan || 1) - 1;
-    const intersects = position.row <= bounds.rowEnd && rowEnd >= bounds.rowStart && position.col <= bounds.colEnd && colEnd >= bounds.colStart;
-    if (!intersects)
-      continue;
-    bounds.rowStart = Math.min(bounds.rowStart, position.row);
-    bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
-    bounds.colStart = Math.min(bounds.colStart, position.col);
-    bounds.colEnd = Math.max(bounds.colEnd, colEnd);
-  }
-  return {
-    anchor: { row: bounds.rowStart, col: bounds.colStart },
-    focus: { row: bounds.rowEnd, col: bounds.colEnd }
-  };
 }
 function getEditor(app) {
   const view = app.workspace.getActiveViewOfType(import_obsidian3.MarkdownView);
@@ -1011,9 +1143,55 @@ var MergeInteraction = class {
   unmerge() {
     if (!this.selection)
       return false;
-    const selection = expandSelectionForUnmerge(this.tableEl, this.selection);
-    this.writeSelection((doc, range) => clearMergeInDocument(doc, range, selection).text);
+    this.writeSelection((doc, range) => clearMergeInDocument(doc, range, this.selection).text);
     return true;
+  }
+  align(alignment) {
+    const range = this.host.getTableRange(this.tableEl);
+    if (range) {
+      this.doAlign(alignment, range);
+      return;
+    }
+    void resolveTableRangeFromVault(this.host.app, this.tableEl).then((resolved) => {
+      if (!resolved) {
+        new import_obsidian3.Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      this.doAlign(alignment, resolved);
+    });
+  }
+  doAlign(alignment, range) {
+    var _a, _b;
+    const transform = (docText) => {
+      const lines = docText.split(/\r?\n/);
+      const lineEnding = docText.includes("\r\n") ? "\r\n" : "\n";
+      const tableText = lines.slice(range.startLine, range.endLine + 1).join(lineEnding);
+      const aligned = setTableAlignment(tableText, alignment);
+      return replaceTableRange(docText, range, aligned);
+    };
+    const editor = getEditor(this.host.app);
+    if (!editor) {
+      const sourcePath = this.tableEl.getAttribute("data-source-path");
+      if (!sourcePath) {
+        new import_obsidian3.Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      void writeTableUsingVault(
+        this.host.app,
+        sourcePath,
+        range,
+        { anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } },
+        (docText) => transform(docText)
+      ).then((written) => {
+        var _a2, _b2;
+        if (written)
+          (_b2 = (_a2 = this.host).onDocumentChanged) == null ? void 0 : _b2.call(_a2);
+      });
+      return;
+    }
+    editor.setValue(transform(editor.getValue()));
+    editor.setCursor({ line: range.startLine, ch: 0 });
+    (_b = (_a = this.host).onDocumentChanged) == null ? void 0 : _b.call(_a);
   }
   showMenu(evt) {
     const selection = this.selection;
@@ -1032,6 +1210,12 @@ var MergeInteraction = class {
     menu.addItem((item) => {
       item.setTitle("Unmerge selected cells (Mod+Shift+Left)").setIcon("split-square-horizontal").onClick(() => this.unmerge());
     });
+    menu.addSeparator();
+    for (const alignment of ["center", "left", "right"]) {
+      menu.addItem((item) => {
+        item.setTitle(`Align table ${alignment}`).setIcon(alignment === "center" ? "align-center" : alignment === "left" ? "align-left" : "align-right").onClick(() => this.align(alignment));
+      });
+    }
     menu.showAtMouseEvent(evt);
   }
   paintSelection() {
@@ -1043,14 +1227,44 @@ var MergeInteraction = class {
     }
   }
   writeSelection(getNextDocument) {
-    var _a, _b;
     if (!this.selection)
       return;
     const editor = getEditor(this.host.app);
     const range = this.host.getTableRange(this.tableEl);
-    if (!editor || !range)
+    if (range) {
+      this.doWriteSelection(editor, range, this.selection, getNextDocument);
       return;
-    const nextText = getNextDocument(editor.getValue(), range, this.selection);
+    }
+    void resolveTableRangeFromVault(this.host.app, this.tableEl).then((resolved) => {
+      if (!resolved) {
+        new import_obsidian3.Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      this.doWriteSelection(editor, resolved, this.selection, getNextDocument);
+    });
+  }
+  doWriteSelection(editor, range, selection, getNextDocument) {
+    var _a, _b;
+    if (!editor) {
+      const sourcePath = this.tableEl.getAttribute("data-source-path");
+      if (!sourcePath) {
+        new import_obsidian3.Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      void writeTableUsingVault(
+        this.host.app,
+        sourcePath,
+        range,
+        selection,
+        getNextDocument
+      ).then((written) => {
+        var _a2, _b2;
+        if (written)
+          (_b2 = (_a2 = this.host).onDocumentChanged) == null ? void 0 : _b2.call(_a2);
+      });
+      return;
+    }
+    const nextText = getNextDocument(editor.getValue(), range, selection);
     editor.setValue(nextText);
     editor.setCursor({ line: range.startLine, ch: 0 });
     (_b = (_a = this.host).onDocumentChanged) == null ? void 0 : _b.call(_a);
@@ -1064,16 +1278,42 @@ function installMergeInteraction(host, tableEl) {
 }
 function runMergeCommand(app, direction, range, selection) {
   const editor = getEditor(app);
-  if (!editor || !range || !selection)
+  if (!range || !selection)
     return false;
+  if (!editor) {
+    const sourcePath = getActiveSourcePath(app);
+    if (!sourcePath)
+      return false;
+    void writeTableUsingVault(
+      app,
+      sourcePath,
+      range,
+      selection,
+      (documentText, tableRange, cellSelection) => applyMergeToDocument(documentText, tableRange, cellSelection, direction).text
+    );
+    return true;
+  }
   editor.setValue(applyMergeToDocument(editor.getValue(), range, selection, direction).text);
   editor.setCursor({ line: range.startLine, ch: 0 });
   return true;
 }
 function runUnmergeCommand(app, range, selection) {
   const editor = getEditor(app);
-  if (!editor || !range || !selection)
+  if (!range || !selection)
     return false;
+  if (!editor) {
+    const sourcePath = getActiveSourcePath(app);
+    if (!sourcePath)
+      return false;
+    void writeTableUsingVault(
+      app,
+      sourcePath,
+      range,
+      selection,
+      (documentText, tableRange, cellSelection) => clearMergeInDocument(documentText, tableRange, cellSelection).text
+    );
+    return true;
+  }
   editor.setValue(clearMergeInDocument(editor.getValue(), range, selection).text);
   editor.setCursor({ line: range.startLine, ch: 0 });
   return true;
@@ -1095,11 +1335,14 @@ function ensureColgroup(tableEl) {
 function getLogicalColumnCount(tableEl) {
   let colCount = 0;
   for (const row of Array.from(tableEl.rows)) {
-    let width = 0;
+    let fallbackColumn = 0;
     for (const cell of Array.from(row.cells)) {
-      width += cell.colSpan || 1;
+      const dataColAttr = cell.getAttribute("data-col");
+      const dataColumn = dataColAttr !== null ? Number(dataColAttr) : NaN;
+      const column = Number.isInteger(dataColumn) && dataColumn >= 0 ? dataColumn : fallbackColumn;
+      colCount = Math.max(colCount, column + (cell.colSpan || 1));
+      fallbackColumn = column + (cell.colSpan || 1);
     }
-    colCount = Math.max(colCount, width);
   }
   return colCount;
 }
@@ -1139,7 +1382,7 @@ function expandSelectionForDirection2(tableEl, selection, direction) {
   }
   return null;
 }
-function expandSelectionForUnmerge2(tableEl, selection) {
+function expandSelectionForUnmerge(tableEl, selection) {
   const bounds = {
     rowStart: Math.min(selection.anchor.row, selection.focus.row),
     rowEnd: Math.max(selection.anchor.row, selection.focus.row),
@@ -1179,18 +1422,29 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SheetExtendSettingTab(this.app, this));
-    this.registerMarkdownPostProcessor((element, context) => {
+    this.registerMarkdownPostProcessor(async (element, context) => {
       if (!this.settings.nativeProcessing)
         return;
-      if (!this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView))
-        return;
       const tables = Array.from(element.querySelectorAll("table:not([id='sheet-extend-parsed'])"));
-      for (const tableEl of tables) {
+      for (let index = 0; index < tables.length; index++) {
+        const tableEl = tables[index];
+        const sectionInfo = context.getSectionInfo(tableEl);
+        if (sectionInfo) {
+          applyPostProcessorIdentity(tableEl, context.sourcePath, void 0, sectionInfo.lineStart);
+        } else {
+          const identity = await resolveTableIdentityFromVault(this.app, tableEl);
+          applyPostProcessorIdentity(
+            tableEl,
+            context.sourcePath,
+            identity == null ? void 0 : identity.tableOrdinal,
+            identity == null ? void 0 : identity.range.startLine
+          );
+        }
         this.processTable(tableEl, context);
       }
     });
     this.registerMarkdownCodeBlockProcessor("sheet", (source, el, ctx) => {
-      const parsed = this.settings.enableFormulas ? applyFormulas(parseAndMerge(source)) : parseAndMerge(source);
+      const parsed = parseAndMerge(source);
       const tableEl = el.createEl("table");
       renderTable(this.app, tableEl, parsed, ctx.sourcePath, this);
       this.setupResizer(tableEl);
@@ -1222,6 +1476,13 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       checkCallback: (checking) => this.runActiveUnmergeCommand(checking),
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "ArrowLeft" }]
     });
+    for (const alignment of ["center", "left", "right"]) {
+      this.addCommand({
+        id: `align-table-${alignment}`,
+        name: `Align table ${alignment}`,
+        checkCallback: (checking) => this.runActiveAlignmentCommand(checking, alignment)
+      });
+    }
     this.registerEvent(this.app.workspace.on("editor-menu", (menu) => {
       this.addMergeItemsToEditorMenu(menu);
     }));
@@ -1328,19 +1589,19 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       tableEl.dataset.sheetExtendTableOrdinal = String(match.tableOrdinal);
     }
   }
-  processTable(tableEl, context) {
+  async processTable(tableEl, context) {
     if (!tableEl.isConnected)
       return;
-    const match = this.resolveTableSource(tableEl, context);
+    const match = await this.resolveTableSource(tableEl, context);
     if (!match || !hasMergeMarkers(match.text)) {
-      this.enhancePlainTable(tableEl, context, match);
+      await this.enhancePlainTable(tableEl, context, match);
       return;
     }
     if (isSourceModeTable2(tableEl)) {
       this.enhanceSourceModeTable(tableEl, match);
       return;
     }
-    const parsed = this.settings.enableFormulas ? applyFormulas(parseAndMerge(match.text)) : parseAndMerge(match.text);
+    const parsed = parseAndMerge(match.text);
     renderTable(this.app, tableEl, parsed, match.sourcePath, this);
     this.applyTableMatchMetadata(tableEl, match);
     this.tableRanges.set(tableEl, match.range);
@@ -1408,7 +1669,8 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     }
     return false;
   }
-  resolveTableSource(tableEl, context) {
+  async resolveTableSource(tableEl, context) {
+    var _a;
     let sourceText = "";
     let range = null;
     let tableOrdinal;
@@ -1445,13 +1707,39 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
         tableOrdinal = match == null ? void 0 : match.tableOrdinal;
       }
     }
+    if (!sourceText) {
+      const sourcePath = tableEl.getAttribute("data-source-path") || context.sourcePath || "";
+      const lineStartAttr = tableEl.getAttribute("data-line-start");
+      if (sourcePath && lineStartAttr) {
+        const lineStart = Number.parseInt(lineStartAttr, 10);
+        if (Number.isInteger(lineStart)) {
+          const vault = this.app.vault;
+          const file = (_a = vault == null ? void 0 : vault.getAbstractFileByPath) == null ? void 0 : _a.call(vault, sourcePath);
+          if (file && (vault == null ? void 0 : vault.read)) {
+            try {
+              const docText = await vault.read(file);
+              const specs = extractMarkdownTableSpecs(docText);
+              const matched = specs.find(
+                (s) => lineStart >= s.range.startLine && lineStart <= s.range.endLine
+              );
+              if (matched) {
+                sourceText = matched.text;
+                range = matched.range;
+                tableOrdinal = matched.tableOrdinal;
+              }
+            } catch (_e) {
+            }
+          }
+        }
+      }
+    }
     if (!sourceText || !range)
       return null;
     return { text: sourceText, range, sourcePath: context.sourcePath || "", tableOrdinal };
   }
-  enhancePlainTable(tableEl, context, existingMatch) {
+  async enhancePlainTable(tableEl, context, existingMatch) {
     ensureColgroup(tableEl);
-    const match = existingMatch || this.resolveTableSource(tableEl, context);
+    const match = existingMatch || await this.resolveTableSource(tableEl, context);
     if (match) {
       this.applyTableMatchMetadata(tableEl, match);
       this.tableRanges.set(tableEl, match.range);
@@ -1510,11 +1798,22 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     if (!active || !active.tableEl.isConnected)
       return false;
     const range = this.tableRanges.get(active.tableEl) || null;
-    if (!range)
+    const selection = range ? expandSelectionForDirection2(active.tableEl, active.selection, direction) : null;
+    if (!selection) {
+      if (!range && !checking) {
+        void resolveTableRangeFromVault(this.app, active.tableEl).then((resolved) => {
+          if (!resolved) {
+            new import_obsidian4.Notice("Could not locate the table source. Try switching to editing mode.");
+            return;
+          }
+          const sel = expandSelectionForDirection2(active.tableEl, active.selection, direction);
+          if (sel && runMergeCommand(this.app, direction, resolved, sel)) {
+            this.scheduleLivePreviewRefresh(0);
+          }
+        });
+      }
       return false;
-    const selection = expandSelectionForDirection2(active.tableEl, active.selection, direction);
-    if (!selection)
-      return false;
+    }
     if (!checking) {
       if (runMergeCommand(this.app, direction, range, selection)) {
         this.scheduleLivePreviewRefresh(0);
@@ -1523,7 +1822,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     return true;
   }
   addMergeItemsToEditorMenu(menu) {
-    var _a;
+    var _a, _b;
     const active = this.activeMergeSelection;
     if (!active || !active.tableEl.isConnected)
       return;
@@ -1532,7 +1831,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
       return;
     const horizontalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "horizontal");
     const verticalSelection = expandSelectionForDirection2(active.tableEl, active.selection, "vertical");
-    const unmergeSelection = expandSelectionForUnmerge2(active.tableEl, active.selection);
+    const unmergeSelection = expandSelectionForUnmerge(active.tableEl, active.selection);
     (_a = menu.addSeparator) == null ? void 0 : _a.call(menu);
     menu.addItem((item) => {
       item.setTitle("Merge selected cells horizontally").setIcon("columns-3").setDisabled(!horizontalSelection).onClick(() => {
@@ -1555,21 +1854,106 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
         }
       });
     });
+    (_b = menu.addSeparator) == null ? void 0 : _b.call(menu);
+    for (const alignment of ["center", "left", "right"]) {
+      menu.addItem((item) => {
+        item.setTitle(`Align table ${alignment}`).setIcon(alignment === "center" ? "align-center" : alignment === "left" ? "align-left" : "align-right").onClick(() => this.applyTableAlignment(active.tableEl, alignment));
+      });
+    }
   }
   runActiveUnmergeCommand(checking) {
     const active = this.activeMergeSelection;
     if (!active || !active.tableEl.isConnected)
       return false;
     const range = this.tableRanges.get(active.tableEl) || null;
-    if (!range)
-      return false;
-    const selection = expandSelectionForUnmerge2(active.tableEl, active.selection);
-    if (!checking) {
-      if (runUnmergeCommand(this.app, range, selection)) {
-        this.scheduleLivePreviewRefresh(0);
+    if (range) {
+      const selection = expandSelectionForUnmerge(active.tableEl, active.selection);
+      if (!checking) {
+        if (runUnmergeCommand(this.app, range, selection)) {
+          this.scheduleLivePreviewRefresh(0);
+        }
       }
+      return true;
     }
-    return true;
+    if (!checking) {
+      void resolveTableRangeFromVault(this.app, active.tableEl).then((resolved) => {
+        if (!resolved) {
+          new import_obsidian4.Notice("Could not locate the table source. Try switching to editing mode.");
+          return;
+        }
+        const selection = expandSelectionForUnmerge(active.tableEl, active.selection);
+        if (runUnmergeCommand(this.app, resolved, selection)) {
+          this.scheduleLivePreviewRefresh(0);
+        }
+      });
+    }
+    return false;
+  }
+  runActiveAlignmentCommand(checking, alignment) {
+    const active = this.activeMergeSelection;
+    if (!active || !active.tableEl.isConnected)
+      return false;
+    const range = this.tableRanges.get(active.tableEl);
+    if (range) {
+      if (!checking)
+        this.applyTableAlignment(active.tableEl, alignment);
+      return true;
+    }
+    if (!checking) {
+      void resolveTableRangeFromVault(this.app, active.tableEl).then((resolved) => {
+        if (!resolved) {
+          new import_obsidian4.Notice("Could not locate the table source. Try switching to editing mode.");
+          return;
+        }
+        this.doApplyTableAlignment(active.tableEl, alignment, resolved);
+      });
+    }
+    return false;
+  }
+  applyTableAlignment(tableEl, alignment) {
+    const range = this.tableRanges.get(tableEl);
+    if (range) {
+      this.doApplyTableAlignment(tableEl, alignment, range);
+      return;
+    }
+    void resolveTableRangeFromVault(this.app, tableEl).then((resolved) => {
+      if (!resolved) {
+        new import_obsidian4.Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      this.doApplyTableAlignment(tableEl, alignment, resolved);
+    });
+  }
+  doApplyTableAlignment(tableEl, alignment, range) {
+    var _a;
+    const sourcePath = tableEl.getAttribute("data-source-path") || "";
+    const editor = (_a = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView)) == null ? void 0 : _a.editor;
+    const transform = (docText) => {
+      const lines = docText.split(/\r?\n/);
+      const lineEnding = docText.includes("\r\n") ? "\r\n" : "\n";
+      const tableText = lines.slice(range.startLine, range.endLine + 1).join(lineEnding);
+      const aligned = setTableAlignment(tableText, alignment);
+      return replaceTableRange(docText, range, aligned);
+    };
+    if (editor) {
+      const next = transform(editor.getValue());
+      editor.setValue(next);
+      editor.setCursor({ line: range.startLine, ch: 0 });
+      this.scheduleLivePreviewRefresh(0);
+      return;
+    }
+    if (sourcePath) {
+      void writeTableUsingVault(
+        this.app,
+        sourcePath,
+        range,
+        { anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } },
+        (documentText) => transform(documentText)
+      ).then((written) => {
+        if (written)
+          this.scheduleLivePreviewRefresh(0);
+      });
+    }
   }
   /**
    * Locate the raw markdown table block corresponding to a rendered table.
@@ -1609,21 +1993,21 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
         if (!this.writeWidthsToMarkdown(tableEl, widths)) {
           saveWidths(this, currentTableId, widths);
         }
-        this.syncWidthsAcrossOpenViews(tableEl, currentTableId, widths);
+        void this.syncWidthsAcrossOpenViews(tableEl, currentTableId, widths);
       }
     });
   }
-  syncWidthsAcrossOpenViews(sourceTable, fallbackSourceTableIds, widths) {
+  async syncWidthsAcrossOpenViews(sourceTable, fallbackSourceTableIds, widths) {
     var _a, _b;
     const sourcePath = sourceTable.getAttribute("data-source-path") || ((_b = (_a = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView)) == null ? void 0 : _a.file) == null ? void 0 : _b.path) || "";
     if (!sourcePath)
       return;
-    const sourceTableIds = this.ensureTableMetadata(sourceTable, sourcePath);
+    const sourceTableIds = await this.ensureTableMetadata(sourceTable, sourcePath);
     const matchIds = sourceTableIds.length ? sourceTableIds : fallbackSourceTableIds;
     for (const tableEl of this.getOpenMarkdownTables(sourcePath)) {
       if (tableEl === sourceTable || tableEl.hasAttribute("data-resizing"))
         continue;
-      const tableIds = this.ensureTableMetadata(tableEl, sourcePath);
+      const tableIds = await this.ensureTableMetadata(tableEl, sourcePath);
       if (!this.haveSharedTableId(matchIds, tableIds))
         continue;
       ensureColgroup(tableEl);
@@ -1646,12 +2030,12 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     }
     return tables;
   }
-  ensureTableMetadata(tableEl, sourcePath) {
+  async ensureTableMetadata(tableEl, sourcePath) {
     let tableIds = getTableIds(tableEl);
     const hasStableId = tableIds.some((id) => !id.startsWith("table-fallback-"));
     if (hasStableId)
       return tableIds;
-    const match = this.resolveTableSource(tableEl, { sourcePath });
+    const match = await this.resolveTableSource(tableEl, { sourcePath });
     if (match) {
       this.applyTableMatchMetadata(tableEl, match);
       this.tableRanges.set(tableEl, match.range);
@@ -1760,7 +2144,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   }
   async loadSettings() {
     const data = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data == null ? void 0 : data.settings);
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, sanitizeSettings(data == null ? void 0 : data.settings));
     const savedVersion = (data == null ? void 0 : data.version) || "0.0.0";
     if (savedVersion !== "1.3.0") {
       this.widthStore = {};
@@ -1781,3 +2165,16 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
     });
   }
 };
+function applyPostProcessorIdentity(tableEl, sourcePath, tableOrdinal, lineStart) {
+  tableEl.setAttribute("data-source-path", sourcePath);
+  if (Number.isInteger(lineStart) && lineStart >= 0) {
+    tableEl.setAttribute("data-line-start", String(lineStart));
+  } else {
+    tableEl.removeAttribute("data-line-start");
+  }
+  if (tableOrdinal !== void 0) {
+    tableEl.dataset.sheetExtendTableOrdinal = String(tableOrdinal);
+  } else {
+    delete tableEl.dataset.sheetExtendTableOrdinal;
+  }
+}

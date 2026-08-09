@@ -92,4 +92,31 @@ describe("parseAndMerge", () => {
     const parsed = parseAndMerge(input);
     expect(parsed.grid[1][0].text).toBe('x^2 + y^2');
   });
+
+  it("merges a vertical marker below a horizontal span", () => {
+    const { grid } = parseAndMerge("| A | < | C |\n| --- | --- | --- |\n| 1 | ^ | 3 |");
+    expect(grid[0][0]).toMatchObject({ text: "A", colspan: 2, rowspan: 2, hidden: false });
+    expect(grid[1][1]).toMatchObject({ hidden: true });
+  });
+
+  it("merges crossed horizontal and vertical markers", () => {
+    const { grid } = parseAndMerge("| A | < |\n| --- | --- |\n| ^ | ^ |");
+    expect(grid[0][0]).toMatchObject({ text: "A", colspan: 2, rowspan: 2, hidden: false });
+    expect(grid[1][0]).toMatchObject({ hidden: true });
+    expect(grid[1][1]).toMatchObject({ hidden: true });
+  });
+
+  it("merges a horizontal marker to the right of a vertical span", () => {
+    const { grid } = parseAndMerge("| A | B |\n| --- | --- |\n| ^ | < |");
+    expect(grid[0][0]).toMatchObject({ text: "A", colspan: 2, rowspan: 2, hidden: false });
+    expect(grid[0][1]).toMatchObject({ hidden: true });
+    expect(grid[1][1]).toMatchObject({ hidden: true });
+  });
+
+  it("still merges consecutive horizontal markers", () => {
+    const { grid } = parseAndMerge("| A | < | < |\n| --- | --- | --- |\n| 1 | 2 | 3 |");
+    expect(grid[0][0]).toMatchObject({ text: "A", colspan: 3, rowspan: 1, hidden: false });
+    expect(grid[0][1]).toMatchObject({ hidden: true });
+    expect(grid[0][2]).toMatchObject({ hidden: true });
+  });
 });

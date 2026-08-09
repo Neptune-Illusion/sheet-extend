@@ -64,4 +64,8 @@ export class MarkdownRenderChild extends Component {
   }
 }
 
+export class Notice {
+  constructor(_message: string) {}
+}
+
 export type App = any;

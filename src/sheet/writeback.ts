@@ -1,4 +1,5 @@
 import { isMergeMarkerCell } from "./detect";
+import { parseAndMerge } from "./parser";
 
 export interface TableRange {
   startLine: number;
@@ -173,7 +174,7 @@ export function clearMergeMarkers(tableText: string, selection: CellSelection): 
   const lines = splitLines(tableText);
   const lineEnding = getLineEnding(tableText);
   const { parsed, delimiterIndex } = parseTableLines(lines);
-  const normalized = normalizeSelection(selection);
+  const normalized = expandSelectionAcrossSpans(tableText, selection);
 
   for (let row = normalized.rowStart; row <= normalized.rowEnd; row++) {
     const lineIndex = markdownLineForGridRow(row, delimiterIndex);
@@ -188,6 +189,32 @@ export function clearMergeMarkers(tableText: string, selection: CellSelection): 
   }
 
   return parsed.map(serializeLine).join(lineEnding);
+}
+
+function expandSelectionAcrossSpans(tableText: string, selection: CellSelection): {
+  rowStart: number;
+  rowEnd: number;
+  colStart: number;
+  colEnd: number;
+} {
+  const bounds = normalizeSelection(selection);
+  const grid = parseAndMerge(tableText).grid;
+  for (let row = 0; row < grid.length; row++) {
+    for (let col = 0; col < grid[row].length; col++) {
+      const cell = grid[row][col];
+      if (cell.hidden) continue;
+      const rowEnd = row + (cell.rowspan || 1) - 1;
+      const colEnd = col + (cell.colspan || 1) - 1;
+      const intersects = row <= bounds.rowEnd && rowEnd >= bounds.rowStart &&
+        col <= bounds.colEnd && colEnd >= bounds.colStart;
+      if (!intersects) continue;
+      bounds.rowStart = Math.min(bounds.rowStart, row);
+      bounds.rowEnd = Math.max(bounds.rowEnd, rowEnd);
+      bounds.colStart = Math.min(bounds.colStart, col);
+      bounds.colEnd = Math.max(bounds.colEnd, colEnd);
+    }
+  }
+  return bounds;
 }
 
 export function replaceTableRange(

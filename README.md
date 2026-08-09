@@ -2,7 +2,7 @@
 
 sheet extend is an Obsidian plugin for working with markdown tables directly in Reading mode and Live Preview.
 
-It adds resizable columns, cell merging, optional markdown-based width persistence, formulas, and enhanced rendering for normal markdown tables and `sheet` code blocks.
+It adds resizable columns, cell merging, optional markdown-based width persistence, and enhanced rendering for normal markdown tables and `sheet` code blocks.
 
 ## Features
 
@@ -11,7 +11,6 @@ It adds resizable columns, cell merging, optional markdown-based width persisten
 - Merge cells horizontally and vertically.
 - Keep legacy `<` and `^` merge syntax readable while writing new merge markers as hidden comments.
 - Store widths in plugin data, or optionally encode widths in the markdown separator row.
-- Render table formulas: `=sum`, `=avg`, `=count`, `=max`, and `=min`.
 - Enhance normal markdown tables without requiring a fenced code block.
 - Render dedicated `sheet` fenced code blocks.
 
@@ -58,16 +57,6 @@ You can also select cells in an enhanced table and use:
 - `Mod+Shift+Down`: merge vertically.
 - `Mod+Shift+Left`: unmerge.
 
-### Formulas
-
-Put a formula in a table cell to calculate from numeric cells above it:
-
-- `=sum`
-- `=avg`
-- `=count`
-- `=max`
-- `=min`
-
 ### Sheet Blocks
 
 ````markdown
@@ -86,7 +75,6 @@ Put a formula in a table cell to calculate from numeric cells above it:
 - `Enable native table processing`
 - `Store column widths in Markdown`
 - `Pixels per separator dash`
-- `Enable table formulas`
 
 ## Notes
 

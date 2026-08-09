@@ -90,29 +90,60 @@ export function parseTable(text: string): ParsedTable {
 }
 
 export function applyMerges(grid: Cell[][]): void {
-  for (let r = 0; r < grid.length; r++) {
-    for (let c = 0; c < grid[r].length; c++) {
+  const rowCount = grid.length;
+  if (rowCount === 0) return;
+  const colCount = grid[0].length;
+
+  // owner[r][c] = the anchor cell that currently owns position (r, c).
+  // When a marker's immediate neighbor is hidden (already covered by an
+  // earlier span), we must keep searching through it to the true anchor.
+  const owner: Cell[][] = [];
+  for (let r = 0; r < rowCount; r++) {
+    const row: Cell[] = [];
+    for (let c = 0; c < colCount; c++) row.push(grid[r][c]);
+    owner.push(row);
+  }
+
+  // Top-left position of each cell in the grid.
+  const pos = new Map<Cell, { r: number; c: number }>();
+  for (let r = 0; r < rowCount; r++) {
+    for (let c = 0; c < colCount; c++) {
+      pos.set(grid[r][c], { r, c });
+    }
+  }
+
+  // Grow the anchor's span so it covers (r, c), then hide every covered
+  // cell that is not the anchor itself (covers B in cross-overlap cases).
+  const expandToCover = (anch: Cell, r: number, c: number): void => {
+    const p = pos.get(anch)!;
+    const rowEnd = p.r + (anch.rowspan || 1);
+    const colEnd = p.c + (anch.colspan || 1);
+    if (r >= rowEnd) anch.rowspan = r - p.r + 1;
+    if (c >= colEnd) anch.colspan = c - p.c + 1;
+    const rrEnd = p.r + anch.rowspan;
+    const ccEnd = p.c + anch.colspan;
+    for (let rr = p.r; rr < rrEnd; rr++) {
+      for (let cc = p.c; cc < ccEnd; cc++) {
+        owner[rr][cc] = anch;
+        const cell = grid[rr][cc];
+        if (cell !== anch) cell.hidden = true;
+      }
+    }
+  };
+
+  for (let r = 0; r < rowCount; r++) {
+    for (let c = 0; c < colCount; c++) {
       const cell = grid[r][c];
       if (cell.hidden) continue;
 
       if (isMergeLeftMarker(cell.text) && c > 0) {
-        for (let pc = c - 1; pc >= 0; pc--) {
-          const prev = grid[r][pc];
-          if (!prev.hidden) {
-            prev.colspan = (prev.colspan || 1) + 1;
-            cell.hidden = true;
-            break;
-          }
-        }
+        const anch = owner[r][c - 1];
+        expandToCover(anch, r, c);
+        cell.hidden = true;
       } else if (isMergeUpMarker(cell.text) && r > 0) {
-        for (let pr = r - 1; pr >= 0; pr--) {
-          const prev = grid[pr][c];
-          if (!prev.hidden) {
-            prev.rowspan = (prev.rowspan || 1) + 1;
-            cell.hidden = true;
-            break;
-          }
-        }
+        const anch = owner[r - 1][c];
+        expandToCover(anch, r, c);
+        cell.hidden = true;
       }
     }
   }
