@@ -1,9 +1,9 @@
 {
   "id": "sheet-extend",
   "name": "sheet extend",
-  "version": "1.4.4",
+  "version": "1.5.1",
   "minAppVersion": "1.5.0",
-  "description": "Resizable markdown tables with cell merging, formulas, and cross-mode width sync",
+  "description": "Resizable markdown tables with cell merging and cross-mode width sync",
   "author": "kongg",
   "authorUrl": "https://github.com/Neptune-Illusion",
   "isDesktopOnly": false

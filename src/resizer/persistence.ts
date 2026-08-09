@@ -35,8 +35,10 @@ export function saveWidths(
 ): void {
   const store: WidthStore = (plugin as any).widthStore || {};
   const tableIds = Array.isArray(tableId) ? tableId : [tableId];
+  const stableIds = tableIds.filter((id) => !id.startsWith("table-fallback-"));
+  if (stableIds.length === 0) return;
   const hasData = widths.some((w) => w !== null);
-  for (const id of tableIds) {
+  for (const id of stableIds) {
     if (hasData) {
       store[id] = widths;
     } else {

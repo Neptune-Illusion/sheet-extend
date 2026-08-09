@@ -17,6 +17,17 @@ function hasRowspanAcrossBoundary(grid: import("./parser").Cell[][], headerCount
   return false;
 }
 
+function getRenderedColumnCount(grid: import("./parser").Cell[][]): number {
+  let count = 0;
+  for (const row of grid) {
+    for (let col = 0; col < row.length; col++) {
+      const cell = row[col];
+      if (!cell.hidden) count = Math.max(count, col + (cell.colspan || 1));
+    }
+  }
+  return count;
+}
+
 export function renderTable(
   app: App,
   tableEl: HTMLTableElement,
@@ -32,7 +43,7 @@ export function renderTable(
 
   if (grid.length === 0) return;
 
-  const colCount = Math.max(...grid.map((row) => row.length));
+  const colCount = getRenderedColumnCount(grid);
   const colgroup = tableEl.createEl("colgroup");
   for (let i = 0; i < colCount; i++) {
     const col = colgroup.createEl("col");

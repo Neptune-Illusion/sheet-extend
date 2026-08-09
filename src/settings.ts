@@ -7,7 +7,6 @@ export interface SheetExtendSettings {
   nativeProcessing: boolean;
   widthPersistence: "plugin" | "markdown";
   pixelsPerDash: number;
-  enableFormulas: boolean;
 }
 
 export const DEFAULT_SETTINGS: SheetExtendSettings = {
@@ -17,8 +16,23 @@ export const DEFAULT_SETTINGS: SheetExtendSettings = {
   nativeProcessing: true,
   widthPersistence: "plugin",
   pixelsPerDash: 8,
-  enableFormulas: true,
 };
+
+/**
+ * Merge loaded settings while dropping any keys not declared in
+ * SheetExtendSettings. Prevents stale fields from an older data.json
+ * (e.g. the removed enableFormulas) from leaking into this.settings.
+ */
+export function sanitizeSettings(loaded: unknown): Partial<SheetExtendSettings> {
+  if (!loaded || typeof loaded !== "object") return {};
+  const source = loaded as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    const value = source[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out as Partial<SheetExtendSettings>;
+}
 
 export class SheetExtendSettingTab extends PluginSettingTab {
   plugin: Plugin;
@@ -109,17 +123,6 @@ export class SheetExtendSettingTab extends PluginSettingTab {
           .setValue(this.settings.pixelsPerDash)
           .onChange(async (value) => {
             await this.updateSettings({ pixelsPerDash: value });
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Enable table formulas")
-      .setDesc("Render =sum, =avg, =count, =max, and =min in enhanced tables")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.settings.enableFormulas)
-          .onChange(async (value) => {
-            await this.updateSettings({ enableFormulas: value });
           })
       );
   }

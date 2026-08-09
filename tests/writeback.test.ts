@@ -55,6 +55,38 @@ describe("markdown merge writeback", () => {
     })).toBe("| A | B | C |\n| --- | --- | --- |\n| 1 |  |  |");
   });
 
+  it("clears a horizontal merge when selection starts on its covered cell", () => {
+    const table = "| A | B | C |\n| --- | --- | --- |\n| 1 | < | < |";
+    expect(clearMergeMarkers(table, {
+      anchor: { row: 1, col: 2 },
+      focus: { row: 1, col: 2 },
+    })).toBe("| A | B | C |\n| --- | --- | --- |\n| 1 |  |  |");
+  });
+
+  it("clears a vertical merge when selection starts on its covered cell", () => {
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| ^ | 4 |";
+    expect(clearMergeMarkers(table, {
+      anchor: { row: 2, col: 0 },
+      focus: { row: 2, col: 0 },
+    })).toBe("| A | B |\n| --- | --- |\n| 1 | 2 |\n|  | 4 |");
+  });
+
+  it("clears a crossed merge cluster from a marker under a horizontal span", () => {
+    const table = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | < |\n| 3 | ^ | ^ |";
+    expect(clearMergeMarkers(table, {
+      anchor: { row: 2, col: 2 },
+      focus: { row: 2, col: 2 },
+    })).toBe("| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |  |\n| 3 |  |  |");
+  });
+
+  it("clears hidden comment markers through the same geometry path", () => {
+    const table = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | <!-- sheet-extend:merge-left --> |\n| 3 | <!-- sheet-extend:merge-up --> | <!-- sheet-extend:merge-up --> |";
+    expect(clearMergeMarkers(table, {
+      anchor: { row: 2, col: 2 },
+      focus: { row: 2, col: 2 },
+    })).toBe("| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |  |\n| 3 |  |  |");
+  });
+
   it("finds and replaces a table range in document text", () => {
     const doc = "before\n| A | B |\n| --- | --- |\n| 1 | 2 |\nafter";
     const range = findTableRangeAtLine(doc, 2);

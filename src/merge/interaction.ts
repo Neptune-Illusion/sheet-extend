@@ -1,12 +1,19 @@
-import { Menu, MarkdownView, type App, type Component, type Editor } from "obsidian";
+import { Menu, MarkdownView, Notice, type App, type Component, type Editor } from "obsidian";
 import {
   applyMergeToDocument,
   clearMergeInDocument,
+  replaceTableRange,
   type CellPosition,
   type CellSelection,
   type MergeDirection,
   type TableRange,
 } from "../sheet/writeback";
+import { setTableAlignment, type TableAlignment } from "../sheet/table-style";
+import {
+  extractMarkdownTableSpecs,
+  matchMarkdownTableSpecForElement,
+  type MarkdownTableSpec,
+} from "../sheet/markdown-table";
 
 interface MergeActionContext {
   tableEl: HTMLTableElement;
@@ -22,6 +29,59 @@ export interface MergeInteractionHost {
 }
 
 type RegisteredElement = HTMLTableElement & { sheetExtendMergeInteraction?: MergeInteraction };
+
+export async function resolveTableIdentityFromVault(
+  app: App,
+  tableEl: HTMLTableElement,
+  sourcePathHint?: string
+): Promise<Pick<MarkdownTableSpec, "range" | "tableOrdinal"> | null> {
+  const sourcePath = tableEl.getAttribute("data-source-path") || sourcePathHint;
+  if (!sourcePath) return null;
+  const vault = (app as any).vault;
+  const file = vault?.getAbstractFileByPath?.(sourcePath);
+  // cachedRead caches per file path, so a document with N tables that all fall
+  // through to this path reads from disk once instead of N times.
+  const read = vault?.cachedRead || vault?.read;
+  if (!file || !read) return null;
+  const docText = await read.call(vault, file);
+  const specs = extractMarkdownTableSpecs(docText);
+  if (!specs.length) return null;
+  const probe = tableEl.cloneNode(true) as HTMLTableElement;
+  probe.removeAttribute("data-line-start");
+  delete probe.dataset.sheetExtendTableOrdinal;
+  const matched = matchMarkdownTableSpecForElement(specs, probe, null);
+  return matched ? { range: matched.range, tableOrdinal: matched.tableOrdinal } : null;
+}
+
+export async function resolveTableRangeFromVault(
+  app: App,
+  tableEl: HTMLTableElement
+): Promise<TableRange | null> {
+  const identity = await resolveTableIdentityFromVault(app, tableEl);
+  return identity?.range || null;
+}
+
+export async function writeTableUsingVault(
+  app: App,
+  sourcePath: string,
+  range: TableRange,
+  selection: CellSelection,
+  transform: (documentText: string, range: TableRange, selection: CellSelection) => string
+): Promise<boolean> {
+  const vault = (app as any).vault;
+  const file = sourcePath && vault?.getAbstractFileByPath?.(sourcePath);
+  if (!file || !vault?.process) return false;
+  await vault.process(file, (documentText: string) => transform(documentText, range, selection));
+  return true;
+}
+
+function getActiveSourcePath(app: App): string | null {
+  const workspace = (app as any).workspace;
+  const activeFile = workspace?.getActiveFile?.();
+  if (activeFile?.path) return activeFile.path;
+  const view = workspace?.activeLeaf?.view;
+  return view?.file?.path || null;
+}
 
 function isSourceModeTable(tableEl: HTMLTableElement): boolean {
   return !!tableEl.closest(".markdown-source-view, .cm-table-widget");
@@ -155,9 +215,56 @@ class MergeInteraction {
 
   unmerge(): boolean {
     if (!this.selection) return false;
-    const selection = expandSelectionForUnmerge(this.tableEl, this.selection);
-    this.writeSelection((doc, range) => clearMergeInDocument(doc, range, selection).text);
+    // Resolve the complete span from source markdown so covered DOM cells do
+    // not need to exist for unmerge to work.
+    this.writeSelection((doc, range) => clearMergeInDocument(doc, range, this.selection!).text);
     return true;
+  }
+
+  private align(alignment: TableAlignment): void {
+    const range = this.host.getTableRange(this.tableEl);
+    if (range) {
+      this.doAlign(alignment, range);
+      return;
+    }
+    void resolveTableRangeFromVault(this.host.app, this.tableEl).then((resolved) => {
+      if (!resolved) {
+        new Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      this.doAlign(alignment, resolved);
+    });
+  }
+
+  private doAlign(alignment: TableAlignment, range: TableRange): void {
+    const transform = (docText: string): string => {
+      const lines = docText.split(/\r?\n/);
+      const lineEnding = docText.includes("\r\n") ? "\r\n" : "\n";
+      const tableText = lines.slice(range.startLine, range.endLine + 1).join(lineEnding);
+      const aligned = setTableAlignment(tableText, alignment);
+      return replaceTableRange(docText, range, aligned);
+    };
+
+    const editor = getEditor(this.host.app);
+    if (!editor) {
+      const sourcePath = this.tableEl.getAttribute("data-source-path");
+      if (!sourcePath) {
+        new Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      // ponytail: selection unused — alignment operates on the separator row, not cell selection
+      void writeTableUsingVault(this.host.app, sourcePath, range,
+        { anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } },
+        (docText) => transform(docText)
+      ).then((written) => {
+        if (written) this.host.onDocumentChanged?.();
+      });
+      return;
+    }
+
+    editor.setValue(transform(editor.getValue()));
+    editor.setCursor({ line: range.startLine, ch: 0 });
+    this.host.onDocumentChanged?.();
   }
 
   private handleClick = (evt: MouseEvent): void => {
@@ -227,6 +334,16 @@ class MergeInteraction {
         .setIcon("split-square-horizontal")
         .onClick(() => this.unmerge());
     });
+
+    menu.addSeparator();
+    for (const alignment of ["center", "left", "right"] as TableAlignment[]) {
+      menu.addItem((item) => {
+        item
+          .setTitle(`Align table ${alignment}`)
+          .setIcon(alignment === "center" ? "align-center" : alignment === "left" ? "align-left" : "align-right")
+          .onClick(() => this.align(alignment));
+      });
+    }
     menu.showAtMouseEvent(evt);
   }
 
@@ -245,9 +362,39 @@ class MergeInteraction {
     if (!this.selection) return;
     const editor = getEditor(this.host.app);
     const range = this.host.getTableRange(this.tableEl);
-    if (!editor || !range) return;
+    if (range) {
+      this.doWriteSelection(editor, range, this.selection, getNextDocument);
+      return;
+    }
+    void resolveTableRangeFromVault(this.host.app, this.tableEl).then((resolved) => {
+      if (!resolved) {
+        new Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      this.doWriteSelection(editor, resolved, this.selection!, getNextDocument);
+    });
+  }
 
-    const nextText = getNextDocument(editor.getValue(), range, this.selection);
+  private doWriteSelection(
+    editor: Editor | null,
+    range: TableRange,
+    selection: CellSelection,
+    getNextDocument: (documentText: string, range: TableRange, selection: CellSelection) => string
+  ): void {
+    if (!editor) {
+      const sourcePath = this.tableEl.getAttribute("data-source-path");
+      if (!sourcePath) {
+        new Notice("Could not locate the table source. Try switching to editing mode.");
+        return;
+      }
+      void writeTableUsingVault(this.host.app, sourcePath, range, selection,
+        getNextDocument).then((written) => {
+          if (written) this.host.onDocumentChanged?.();
+        });
+      return;
+    }
+
+    const nextText = getNextDocument(editor.getValue(), range, selection);
     editor.setValue(nextText);
     editor.setCursor({ line: range.startLine, ch: 0 });
     this.host.onDocumentChanged?.();
@@ -267,7 +414,16 @@ export function runMergeCommand(
   selection: CellSelection | null
 ): boolean {
   const editor = getEditor(app);
-  if (!editor || !range || !selection) return false;
+  if (!range || !selection) return false;
+
+  if (!editor) {
+    const sourcePath = getActiveSourcePath(app);
+    if (!sourcePath) return false;
+    void writeTableUsingVault(app, sourcePath, range, selection,
+      (documentText, tableRange, cellSelection) =>
+        applyMergeToDocument(documentText, tableRange, cellSelection, direction).text);
+    return true;
+  }
 
   editor.setValue(applyMergeToDocument(editor.getValue(), range, selection, direction).text);
   editor.setCursor({ line: range.startLine, ch: 0 });
@@ -280,7 +436,16 @@ export function runUnmergeCommand(
   selection: CellSelection | null
 ): boolean {
   const editor = getEditor(app);
-  if (!editor || !range || !selection) return false;
+  if (!range || !selection) return false;
+
+  if (!editor) {
+    const sourcePath = getActiveSourcePath(app);
+    if (!sourcePath) return false;
+    void writeTableUsingVault(app, sourcePath, range, selection,
+      (documentText, tableRange, cellSelection) =>
+        clearMergeInDocument(documentText, tableRange, cellSelection).text);
+    return true;
+  }
 
   editor.setValue(clearMergeInDocument(editor.getValue(), range, selection).text);
   editor.setCursor({ line: range.startLine, ch: 0 });

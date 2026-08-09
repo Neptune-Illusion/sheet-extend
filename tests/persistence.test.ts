@@ -61,7 +61,7 @@ describe("getTableId", () => {
     });
   });
 
-  it("saves and loads widths across table id aliases", () => {
+  it("does not let fallback id pollute widths across tables with the same text", () => {
     const saveData = vi.fn();
     const plugin = {
       settings: {},
@@ -69,10 +69,42 @@ describe("getTableId", () => {
       saveData,
     } as any;
 
-    saveWidths(plugin, ["table-line", "table-ordinal"], [120, null]);
+    const tableA = document.createElement("table");
+    tableA.setAttribute("data-source-path", "notes/demo.md");
+    tableA.setAttribute("data-line-start", "5");
+    tableA.textContent = "Hello World";
 
-    expect(loadWidths(plugin, "table-line")).toEqual([120, null]);
-    expect(loadWidths(plugin, "table-ordinal")).toEqual([120, null]);
-    expect(loadWidths(plugin, ["missing", "table-ordinal"])).toEqual([120, null]);
+    const tableB = document.createElement("table");
+    tableB.setAttribute("data-source-path", "notes/demo.md");
+    tableB.setAttribute("data-line-start", "20");
+    tableB.textContent = "Hello World";
+
+    const idsA = getTableIds(tableA);
+    const idsB = getTableIds(tableB);
+    expect(idsA[idsA.length - 1]).toBe(idsB[idsB.length - 1]);
+
+    saveWidths(plugin, idsA, [120, 80]);
+
+    expect(loadWidths(plugin, idsB)).toBeNull();
+    expect(saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        columnWidths: expect.not.objectContaining({
+          [idsA[idsA.length - 1]]: expect.anything(),
+        }),
+      })
+    );
+  });
+
+  it("still reads widths stored under fallback id for backward compatibility", () => {
+    const saveData = vi.fn();
+    const plugin = {
+      settings: {},
+      widthStore: {
+        "table-fallback-Hello_World": [120, 80],
+      },
+      saveData,
+    } as any;
+
+    expect(loadWidths(plugin, "table-fallback-Hello_World")).toEqual([120, 80]);
   });
 });
