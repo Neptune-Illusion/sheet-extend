@@ -187,7 +187,7 @@ export default class SheetExtendPlugin extends Plugin {
         if (sectionInfo) {
           applyPostProcessorIdentity(tableEl, context.sourcePath, undefined, sectionInfo.lineStart);
         } else {
-          const identity = await resolveTableIdentityFromVault(this.app, tableEl);
+          const identity = await resolveTableIdentityFromVault(this.app, tableEl, context.sourcePath);
           applyPostProcessorIdentity(
             tableEl,
             context.sourcePath,

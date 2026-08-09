@@ -73,6 +73,24 @@ describe("merge interaction vault fallback", () => {
     expect(await resolveTableRangeFromVault(app, table)).toEqual({ startLine: 1, endLine: 3 });
   });
 
+  it("matches a reading-mode table without preassigned identity", async () => {
+    const doc = "intro\n| A | B |\n| --- | --- |\n| 6 | ^ |";
+    const table = document.createElement("table");
+    table.innerHTML =
+      "<thead><tr><th>A</th><th>B</th></tr></thead>" +
+      "<tbody><tr><td>6</td><td>^</td></tr></tbody>";
+    const app = {
+      workspace: { getActiveViewOfType: () => null },
+      vault: {
+        getAbstractFileByPath: (path: string) => ({ path }),
+        read: async () => doc,
+      },
+    } as any;
+
+    const identity = await resolveTableIdentityFromVault(app, table, "note.md");
+    expect(identity?.range).toEqual({ startLine: 1, endLine: 3 });
+  });
+
   it("rejects ambiguous identical tables instead of choosing the first", async () => {
     const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n| A | B |\n| --- | --- |\n| 1 | 2 |";
     const table = document.createElement("table");

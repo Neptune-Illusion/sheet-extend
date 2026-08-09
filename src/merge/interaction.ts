@@ -32,14 +32,18 @@ type RegisteredElement = HTMLTableElement & { sheetExtendMergeInteraction?: Merg
 
 export async function resolveTableIdentityFromVault(
   app: App,
-  tableEl: HTMLTableElement
+  tableEl: HTMLTableElement,
+  sourcePathHint?: string
 ): Promise<Pick<MarkdownTableSpec, "range" | "tableOrdinal"> | null> {
-  const sourcePath = tableEl.getAttribute("data-source-path");
+  const sourcePath = tableEl.getAttribute("data-source-path") || sourcePathHint;
   if (!sourcePath) return null;
   const vault = (app as any).vault;
   const file = vault?.getAbstractFileByPath?.(sourcePath);
-  if (!file || !vault?.read) return null;
-  const docText = await vault.read(file);
+  // cachedRead caches per file path, so a document with N tables that all fall
+  // through to this path reads from disk once instead of N times.
+  const read = vault?.cachedRead || vault?.read;
+  if (!file || !read) return null;
+  const docText = await read.call(vault, file);
   const specs = extractMarkdownTableSpecs(docText);
   if (!specs.length) return null;
   const probe = tableEl.cloneNode(true) as HTMLTableElement;

@@ -983,16 +983,17 @@ function setTableAlignment(markdown, alignment) {
 }
 
 // src/merge/interaction.ts
-async function resolveTableIdentityFromVault(app, tableEl) {
+async function resolveTableIdentityFromVault(app, tableEl, sourcePathHint) {
   var _a;
-  const sourcePath = tableEl.getAttribute("data-source-path");
+  const sourcePath = tableEl.getAttribute("data-source-path") || sourcePathHint;
   if (!sourcePath)
     return null;
   const vault = app.vault;
   const file = (_a = vault == null ? void 0 : vault.getAbstractFileByPath) == null ? void 0 : _a.call(vault, sourcePath);
-  if (!file || !(vault == null ? void 0 : vault.read))
+  const read = (vault == null ? void 0 : vault.cachedRead) || (vault == null ? void 0 : vault.read);
+  if (!file || !read)
     return null;
-  const docText = await vault.read(file);
+  const docText = await read.call(vault, file);
   const specs = extractMarkdownTableSpecs(docText);
   if (!specs.length)
     return null;
@@ -1432,7 +1433,7 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
         if (sectionInfo) {
           applyPostProcessorIdentity(tableEl, context.sourcePath, void 0, sectionInfo.lineStart);
         } else {
-          const identity = await resolveTableIdentityFromVault(this.app, tableEl);
+          const identity = await resolveTableIdentityFromVault(this.app, tableEl, context.sourcePath);
           applyPostProcessorIdentity(
             tableEl,
             context.sourcePath,
