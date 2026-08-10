@@ -417,12 +417,19 @@ export default class SheetExtendPlugin extends Plugin {
   private applyMergePreviewToExistingTable(tableEl: HTMLTableElement, tableText: string): void {
     const parsed = parseAndMerge(tableText);
     if (this.parsedTableHasRowspanAcrossDomSections(tableEl, parsed)) {
-      return;
+      const header = tableEl.tHead;
+      const bodies = Array.from(tableEl.tBodies);
+      const rows = Array.from(tableEl.rows);
+      const body = tableEl.createTBody();
+      for (const row of rows) body.append(row);
+      header?.remove();
+      for (const existingBody of bodies) existingBody.remove();
     }
     const cellByPosition = new Map<string, HTMLTableCellElement>();
 
     for (const cell of Array.from(tableEl.querySelectorAll("th, td")) as HTMLTableCellElement[]) {
       cell.style.display = "";
+      cell.hidden = false;
       cell.colSpan = 1;
       cell.rowSpan = 1;
     }
@@ -444,7 +451,9 @@ export default class SheetExtendPlugin extends Plugin {
 
         if (parsedCell.hidden) {
           domCell.style.display = "none";
+          domCell.hidden = true;
         } else {
+          domCell.hidden = false;
           domCell.colSpan = parsedCell.colspan || 1;
           domCell.rowSpan = parsedCell.rowspan || 1;
         }

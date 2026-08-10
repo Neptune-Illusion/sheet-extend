@@ -1625,11 +1625,20 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
   applyMergePreviewToExistingTable(tableEl, tableText) {
     const parsed = parseAndMerge(tableText);
     if (this.parsedTableHasRowspanAcrossDomSections(tableEl, parsed)) {
-      return;
+      const header = tableEl.tHead;
+      const bodies = Array.from(tableEl.tBodies);
+      const rows = Array.from(tableEl.rows);
+      const body = tableEl.createTBody();
+      for (const row of rows)
+        body.append(row);
+      header == null ? void 0 : header.remove();
+      for (const existingBody of bodies)
+        existingBody.remove();
     }
     const cellByPosition = /* @__PURE__ */ new Map();
     for (const cell of Array.from(tableEl.querySelectorAll("th, td"))) {
       cell.style.display = "";
+      cell.hidden = false;
       cell.colSpan = 1;
       cell.rowSpan = 1;
     }
@@ -1649,7 +1658,9 @@ var SheetExtendPlugin = class extends import_obsidian4.Plugin {
           continue;
         if (parsedCell.hidden) {
           domCell.style.display = "none";
+          domCell.hidden = true;
         } else {
+          domCell.hidden = false;
           domCell.colSpan = parsedCell.colspan || 1;
           domCell.rowSpan = parsedCell.rowspan || 1;
         }

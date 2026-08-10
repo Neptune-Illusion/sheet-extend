@@ -1,6 +1,6 @@
 {
   "name": "sheet-extend",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Obsidian plugin for resizable markdown tables with cell merging and cross-mode width sync",
   "main": "main.js",
   "scripts": {
